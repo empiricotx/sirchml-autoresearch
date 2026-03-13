@@ -1,24 +1,19 @@
 [project]
-name = "autoresearch"
+name = "sirna-architecture-search"
 version = "0.1.0"
-description = "Autonomous pretraining research swarm"
+description = "Constrained autonomous architecture search for siRNA regression"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "kernels>=0.11.7",
-    "matplotlib>=3.10.8",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
-    "pyarrow>=21.0.0",
-    "requests>=2.32.0",
-    "rustbpe>=0.1.0",
-    "tiktoken>=0.11.0",
-    "torch==2.9.1",
+    "pyarrow>=23.0.1",
+    "torch>=2.10.0",
 ]
 
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-cu128" },
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
 ]
 
 [[tool.uv.index]]

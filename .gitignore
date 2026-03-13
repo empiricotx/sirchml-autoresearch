@@ -11,6 +11,8 @@ wheels/
 worktrees/
 results/
 queue/
+.cache/
+runs/
 
 # Agent prompt files (generated per-session by launchers)
 CLAUDE.md
@@ -21,3 +23,7 @@ dev/
 
 # Results file
 results.tsv
+
+# Local datasets
+data/*
+!data/README.md
