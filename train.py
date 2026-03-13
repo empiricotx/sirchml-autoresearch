@@ -8,7 +8,7 @@ from prepare import ArchitectureContext, ArchitectureSpec, run_experiment
 
 ARCHITECTURE = ArchitectureSpec(
     family="mlp",
-    hidden_dims=(384, 192, 96),
+    hidden_dims=(256, 128, 64),
     activation="gelu",
     dropout=0.0,
     normalization="none",
