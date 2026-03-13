@@ -83,6 +83,9 @@ class MetricConfig:
     primary_metric_name: str = "weighted_cv_rmse_mean"
     primary_metric_direction: str = "lower_is_better"
     improvement_epsilon: float = 1e-4
+    prediction_scale_min: float = 0.45
+    prediction_scale_max: float = 0.9
+    effective_threshold: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,7 @@ METRIC_CONFIG = MetricConfig()
 ARCHITECTURE_CONSTRAINTS = ArchitectureConstraints()
 
 RESULTS_HEADER = (
-    "commit\tweighted_cv_rmse_mean\tcv_rmse_std\tstatus\tnum_params\ttrain_seconds\tdescription\n"
+    "commit\tweighted_cv_rmse_mean\tcv_rmse_std\tweighted_cv_auc\tstatus\tnum_params\ttrain_seconds\tdescription\n"
 )
 
 ALLOWED_TRAIN_IMPORTS = {
@@ -188,6 +191,7 @@ class RegressionMetrics:
     mae: float
     r2: float
     squared_error_sum: float
+    auc: float | None
 
 
 @dataclass(frozen=True)
@@ -212,10 +216,12 @@ class ExperimentSummary:
     cv_rmse_std: float
     weighted_cv_mae_mean: float
     weighted_cv_r2_mean: float | None
+    weighted_cv_auc_mean: float | None
     pooled_cv_rmse: float
     test_rmse: float | None
     test_mae: float | None
     test_r2: float | None
+    test_auc: float | None
     num_params: int
     train_seconds: float
     feature_dim: int
@@ -300,13 +306,56 @@ def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return 1.0 - (residual / total)
 
 
-def evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> RegressionMetrics:
-    squared_error_sum = float(np.sum(np.square(y_pred - y_true)))
+def scale_regression_predictions(
+    y_pred: np.ndarray,
+    metric_config: MetricConfig = METRIC_CONFIG,
+) -> np.ndarray:
+    prediction_span = metric_config.prediction_scale_max - metric_config.prediction_scale_min
+    if prediction_span <= 0:
+        raise ValueError("MetricConfig prediction scale must have a positive span.")
+    scaled_predictions = (y_pred - metric_config.prediction_scale_min) / prediction_span
+    return np.clip(scaled_predictions, 0.0, 1.0).astype(np.float32)
+
+
+def binary_effective_labels(
+    y_true: np.ndarray,
+    metric_config: MetricConfig = METRIC_CONFIG,
+) -> np.ndarray:
+    return (y_true < metric_config.effective_threshold).astype(np.int8)
+
+
+def roc_auc_score_binary(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    if y_true.ndim != 1 or y_score.ndim != 1:
+        raise ValueError("roc_auc_score_binary expects 1D arrays.")
+    if y_true.shape[0] != y_score.shape[0]:
+        raise ValueError("roc_auc_score_binary expects arrays of equal length.")
+
+    positives = int(y_true.sum())
+    negatives = int(y_true.shape[0] - positives)
+    if positives == 0 or negatives == 0:
+        return math.nan
+
+    ranks = pd.Series(y_score).rank(method="average").to_numpy(dtype=np.float64)
+    positive_rank_sum = float(ranks[y_true.astype(bool)].sum())
+    u_statistic = positive_rank_sum - (positives * (positives + 1) / 2.0)
+    return float(u_statistic / (positives * negatives))
+
+
+def evaluate_predictions(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metric_config: MetricConfig = METRIC_CONFIG,
+) -> RegressionMetrics:
+    scaled_predictions = scale_regression_predictions(y_pred, metric_config)
+    squared_error_sum = float(np.sum(np.square(scaled_predictions - y_true)))
+    effective_labels = binary_effective_labels(y_true, metric_config)
+    effective_scores = 1.0 - scaled_predictions
     return RegressionMetrics(
-        rmse=rmse(y_true, y_pred),
-        mae=mae(y_true, y_pred),
-        r2=r2_score(y_true, y_pred),
+        rmse=rmse(y_true, scaled_predictions),
+        mae=mae(y_true, scaled_predictions),
+        r2=r2_score(y_true, scaled_predictions),
         squared_error_sum=squared_error_sum,
+        auc=roc_auc_score_binary(effective_labels, effective_scores),
     )
 
 
@@ -1155,6 +1204,21 @@ def aggregate_fold_results(
             )
         )
 
+    valid_auc_values = [
+        (result.metrics.auc, result.count)
+        for result in fold_results
+        if result.metrics.auc is not None and not math.isnan(result.metrics.auc)
+    ]
+    weighted_auc = None
+    if valid_auc_values:
+        auc_weights = np.array([weight for _, weight in valid_auc_values], dtype=np.float64)
+        weighted_auc = float(
+            np.average(
+                np.array([value for value, _ in valid_auc_values], dtype=np.float64),
+                weights=auc_weights,
+            )
+        )
+
     weighted_rmse_mean = float(np.average(rmse_values, weights=weights))
     return {
         "primary_metric_value": weighted_rmse_mean,
@@ -1163,6 +1227,7 @@ def aggregate_fold_results(
         "cv_rmse_std": float(np.std(rmse_values)),
         "weighted_cv_mae_mean": float(np.average(mae_values, weights=weights)),
         "weighted_cv_r2_mean": weighted_r2,
+        "weighted_cv_auc_mean": weighted_auc,
         "pooled_cv_rmse": float(math.sqrt(squared_error_sum / total_examples)),
         "primary_metric_name": metric_config.primary_metric_name,
     }
@@ -1259,11 +1324,16 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
         print("weighted_cv_r2:      nan")
     else:
         print(f"weighted_cv_r2:      {summary.weighted_cv_r2_mean:.6f}")
+    if summary.weighted_cv_auc_mean is None:
+        print("weighted_cv_auc:     nan")
+    else:
+        print(f"weighted_cv_auc:     {summary.weighted_cv_auc_mean:.6f}")
     print(f"pooled_cv_rmse:      {summary.pooled_cv_rmse:.6f}")
     if summary.test_rmse is None:
         print("test_rmse:           nan")
         print("test_mae:            nan")
         print("test_r2:             nan")
+        print("test_auc:            nan")
     else:
         print(f"test_rmse:           {summary.test_rmse:.6f}")
         print(f"test_mae:            {summary.test_mae:.6f}")
@@ -1271,6 +1341,10 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
             print("test_r2:             nan")
         else:
             print(f"test_r2:             {summary.test_r2:.6f}")
+        if summary.test_auc is None:
+            print("test_auc:            nan")
+        else:
+            print(f"test_auc:            {summary.test_auc:.6f}")
     print(f"train_seconds:       {summary.train_seconds:.1f}")
     print(f"num_params:          {summary.num_params}")
     print(f"feature_dim:         {summary.feature_dim}")
@@ -1355,10 +1429,18 @@ def run_experiment(
         weighted_cv_r2_mean=(
             None if aggregate["weighted_cv_r2_mean"] is None else float(aggregate["weighted_cv_r2_mean"])
         ),
+        weighted_cv_auc_mean=(
+            None if aggregate["weighted_cv_auc_mean"] is None else float(aggregate["weighted_cv_auc_mean"])
+        ),
         pooled_cv_rmse=float(aggregate["pooled_cv_rmse"]),
         test_rmse=None if holdout_metrics is None else holdout_metrics.rmse,
         test_mae=None if holdout_metrics is None else holdout_metrics.mae,
         test_r2=None if holdout_metrics is None or math.isnan(holdout_metrics.r2) else holdout_metrics.r2,
+        test_auc=(
+            None
+            if holdout_metrics is None or holdout_metrics.auc is None or math.isnan(holdout_metrics.auc)
+            else holdout_metrics.auc
+        ),
         num_params=num_params,
         train_seconds=time.perf_counter() - start,
         feature_dim=prepared.features.shape[1],

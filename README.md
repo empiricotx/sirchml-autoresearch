@@ -41,6 +41,14 @@ The primary metric is:
 
 It is computed as the weighted average of per-fold RMSE values, with each fold weighted by the number of evaluation sequences in that held-out gene.
 
+Before metrics are computed, raw regression predictions are rescaled and clipped into `[0, 1]` using the fixed rule in [prepare.py](/Users/lucasplatter/sirchml-autoresearch/prepare.py):
+
+```python
+scaled_preds = np.clip((y_pred - 0.45) / (0.9 - 0.45), 0, 1)
+```
+
+The harness also tracks AUC using `rel_exp_individual < 0.4` as the effective class, while still selecting models by `weighted_cv_rmse_mean`.
+
 This is intentionally **not** the same as an unweighted mean over genes.
 
 ## Required dataset columns

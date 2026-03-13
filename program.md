@@ -83,7 +83,7 @@ You must not change:
 Use `results.tsv` with the header:
 
 ```text
-commit	weighted_cv_rmse_mean	cv_rmse_std	status	num_params	train_seconds	description
+commit	weighted_cv_rmse_mean	cv_rmse_std	weighted_cv_auc	status	num_params	train_seconds	description
 ```
 
 Use status values:
