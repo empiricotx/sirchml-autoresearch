@@ -12,7 +12,7 @@ ARCHITECTURE = ArchitectureSpec(
     activation="silu",
     dropout=0.02,
     normalization="none",
-    use_bias=True,
+    use_bias=False,
 )
 
 
