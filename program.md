@@ -23,11 +23,11 @@ Those are fixed by the human and define the experiment boundary.
 
 ## Objective
 
-Minimize `weighted_cv_rmse_mean`.
+Maximize `weighted_cv_auc`.
 
-Lower is better.
+Higher is better.
 
-The metric is the weighted mean of per-gene validation RMSE values, weighted by the number of evaluation sequences in each held-out gene fold.
+The metric is the weighted mean of per-gene validation AUC values, weighted by the number of evaluation sequences in each held-out gene fold.
 
 ## Experiment protocol
 
@@ -44,7 +44,7 @@ uv run train.py > run.log 2>&1
 6. Log the result in `results.tsv`.
 7. Edit only `train.py`.
 8. Run one experiment at a time.
-9. Keep the commit only if `weighted_cv_rmse_mean` improves by more than the configured epsilon.
+9. Keep the commit only if `weighted_cv_auc` improves by more than the configured epsilon.
 10. If the score is worse or unchanged, revert the `train.py` change.
 
 ## What you are allowed to change
@@ -83,7 +83,7 @@ You must not change:
 Use `results.tsv` with the header:
 
 ```text
-commit	weighted_cv_rmse_mean	cv_rmse_std	weighted_cv_auc	status	num_params	train_seconds	description
+commit	weighted_cv_rmse_mean	cv_rmse_std	weighted_cv_auc	weighted_cv_pearson_r	weighted_cv_spearman_r	status	num_params	train_seconds	description
 ```
 
 Use status values:

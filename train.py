@@ -8,12 +8,14 @@ from prepare import ArchitectureContext, ArchitectureSpec, run_experiment
 
 ARCHITECTURE = ArchitectureSpec(
     family="mlp",
-    hidden_dims=(320, 160, 80, 40),
+    hidden_dims=(192, 128, 64, 32, 16),
     activation="silu",
-    dropout=0.02,
+    dropout=0.007,
     normalization="none",
     use_bias=True,
 )
+
+USE_INPUT_SKIP = False
 
 
 def make_activation(name: str) -> nn.Module:
@@ -90,10 +92,16 @@ class RegressionMLP(nn.Module):
             previous_width = width
         self.backbone = nn.Sequential(*layers) if layers else nn.Identity()
         self.head = nn.Linear(previous_width, output_dim, bias=architecture.use_bias)
+        self.input_skip = (
+            nn.Linear(input_dim, output_dim, bias=False) if USE_INPUT_SKIP else None
+        )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         hidden = self.backbone(inputs)
-        return self.head(hidden)
+        outputs = self.head(hidden)
+        if self.input_skip is not None:
+            outputs = outputs + self.input_skip(inputs)
+        return outputs
 
 
 def build_model(context: ArchitectureContext) -> nn.Module:

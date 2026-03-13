@@ -1,0 +1,26 @@
+---
+primary_metric_name: weighted_cv_auc
+primary_metric:      0.642764
+weighted_cv_rmse:    0.355546
+cv_rmse_mean:        0.290981
+cv_rmse_std:         0.157831
+weighted_cv_mae:     0.279644
+weighted_cv_r2:      -0.581782
+weighted_cv_auc:     0.642764
+weighted_cv_pearson_r: 0.280167
+weighted_cv_spearman_r: 0.262330
+pooled_cv_rmse:      0.377827
+test_rmse:           nan
+test_mae:            nan
+test_r2:             nan
+test_auc:            nan
+test_pearson_r:      nan
+test_spearman_r:     nan
+train_seconds:       91.5
+num_params:          49849
+feature_dim:         74
+num_rows:            453
+cv_folds:            24
+train_genes:         ANGPTL4,ANGPTL7,ASPN,CD33,CD68,CDHR3,CEMIP2,CPN1,CSPG4,DKK2,ENTPD8,FGG,GPAM,HGFAC,LBP,MS4A4E,MST1,MTRES1,PLG,PLIN1,PLOD2,SOD1,SOS2,SYNJ2
+test_genes:          -
+run_dir:             /Users/lucasplatter/sirchml-autoresearch/runs/20260313-092921

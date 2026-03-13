@@ -24,22 +24,22 @@ The agent is constrained to model architecture only. Dataset loading, sequence f
    - loads the architecture from `train.py`
    - validates that `train.py` only uses allowed imports and patterns
    - runs fixed-budget cross-validation
-   - reports the primary metric `weighted_cv_rmse_mean`
+   - reports the primary metric `weighted_cv_auc`
    - optionally trains once on the full train split and reports a final holdout test metric
 
 3. The autonomous agent loop in `program.md`
    - edits only `train.py`
    - runs `uv run train.py`
-   - compares `weighted_cv_rmse_mean`
+   - compares `weighted_cv_auc`
    - keeps the change only if the metric improves
 
 ## Primary metric
 
 The primary metric is:
 
-- `weighted_cv_rmse_mean`
+- `weighted_cv_auc`
 
-It is computed as the weighted average of per-fold RMSE values, with each fold weighted by the number of evaluation sequences in that held-out gene.
+It is computed as the weighted average of per-fold AUC values, with each fold weighted by the number of evaluation sequences in that held-out gene.
 
 Before metrics are computed, raw regression predictions are rescaled and clipped into `[0, 1]` using the fixed rule in [prepare.py](/Users/lucasplatter/sirchml-autoresearch/prepare.py):
 
@@ -47,7 +47,7 @@ Before metrics are computed, raw regression predictions are rescaled and clipped
 scaled_preds = np.clip((y_pred - 0.45) / (0.9 - 0.45), 0, 1)
 ```
 
-The harness also tracks AUC using `rel_exp_individual < 0.4` as the effective class, while still selecting models by `weighted_cv_rmse_mean`.
+The harness still tracks weighted RMSE, plus weighted Pearson and Spearman correlation on the scaled predictions, while selecting models by `weighted_cv_auc`.
 
 This is intentionally **not** the same as an unweighted mean over genes.
 

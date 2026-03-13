@@ -127,7 +127,15 @@ def test_weighted_cv_rmse_mean_uses_fold_sizes() -> None:
         FoldResult(
             gene="GENE1",
             count=2,
-            metrics=RegressionMetrics(rmse=1.0, mae=0.8, r2=0.2, squared_error_sum=2.0, auc=0.9),
+            metrics=RegressionMetrics(
+                rmse=1.0,
+                mae=0.8,
+                r2=0.2,
+                squared_error_sum=2.0,
+                auc=0.9,
+                pearson_r=0.1,
+                spearman_r=0.3,
+            ),
             train_seconds=1.0,
             epochs=2,
             best_epoch=2,
@@ -136,7 +144,15 @@ def test_weighted_cv_rmse_mean_uses_fold_sizes() -> None:
         FoldResult(
             gene="GENE2",
             count=6,
-            metrics=RegressionMetrics(rmse=0.5, mae=0.4, r2=0.4, squared_error_sum=1.5, auc=0.6),
+            metrics=RegressionMetrics(
+                rmse=0.5,
+                mae=0.4,
+                r2=0.4,
+                squared_error_sum=1.5,
+                auc=0.6,
+                pearson_r=0.7,
+                spearman_r=0.9,
+            ),
             train_seconds=1.0,
             epochs=2,
             best_epoch=1,
@@ -146,11 +162,16 @@ def test_weighted_cv_rmse_mean_uses_fold_sizes() -> None:
 
     aggregate = aggregate_fold_results(fold_results)
     expected_weighted_rmse = (2 * 1.0 + 6 * 0.5) / 8
+    expected_weighted_auc = (2 * 0.9 + 6 * 0.6) / 8
 
+    assert aggregate["primary_metric_name"] == "weighted_cv_auc"
+    assert aggregate["primary_metric_value"] == expected_weighted_auc
     assert aggregate["weighted_cv_rmse_mean"] == expected_weighted_rmse
     assert aggregate["cv_rmse_mean"] == 0.75
     assert aggregate["pooled_cv_rmse"] == np.sqrt((2.0 + 1.5) / 8)
-    assert aggregate["weighted_cv_auc_mean"] == (2 * 0.9 + 6 * 0.6) / 8
+    assert aggregate["weighted_cv_auc_mean"] == expected_weighted_auc
+    assert aggregate["weighted_cv_pearson_r_mean"] == (2 * 0.1 + 6 * 0.7) / 8
+    assert aggregate["weighted_cv_spearman_r_mean"] == (2 * 0.3 + 6 * 0.9) / 8
 
 
 def test_prediction_scaling_and_auc_follow_configured_rule() -> None:
@@ -159,20 +180,26 @@ def test_prediction_scaling_and_auc_follow_configured_rule() -> None:
         prediction_scale_max=0.9,
         effective_threshold=0.4,
     )
-    y_true = np.array([0.2, 0.35, 0.6, 0.8], dtype=np.float32)
-    raw_predictions = np.array([0.45, 0.50, 0.70, 0.90], dtype=np.float32)
+    y_true = np.array([0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0], dtype=np.float32)
+    raw_predictions = np.array([0.45, 0.60, 0.75, 0.90], dtype=np.float32)
 
     scaled_predictions = scale_regression_predictions(raw_predictions, metric_config)
     metrics = evaluate_predictions(y_true, raw_predictions, metric_config)
 
     np.testing.assert_allclose(
         scaled_predictions,
-        np.array([0.0, 0.11111111, 0.5555556, 1.0], dtype=np.float32),
+        y_true,
         rtol=1e-6,
         atol=1e-6,
     )
     assert metrics.rmse == np.sqrt(np.mean(np.square(scaled_predictions - y_true)))
     assert metrics.auc == 1.0
+    np.testing.assert_allclose(
+        np.array([metrics.pearson_r, metrics.spearman_r], dtype=np.float64),
+        np.array([1.0, 1.0], dtype=np.float64),
+        rtol=1e-12,
+        atol=1e-12,
+    )
 
 
 def test_validate_train_source_rejects_forbidden_calls(tmp_path: Path) -> None:

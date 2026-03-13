@@ -80,8 +80,8 @@ class TrainingConfig:
 
 @dataclass(frozen=True)
 class MetricConfig:
-    primary_metric_name: str = "weighted_cv_rmse_mean"
-    primary_metric_direction: str = "lower_is_better"
+    primary_metric_name: str = "weighted_cv_auc"
+    primary_metric_direction: str = "higher_is_better"
     improvement_epsilon: float = 1e-4
     prediction_scale_min: float = 0.45
     prediction_scale_max: float = 0.9
@@ -107,7 +107,7 @@ METRIC_CONFIG = MetricConfig()
 ARCHITECTURE_CONSTRAINTS = ArchitectureConstraints()
 
 RESULTS_HEADER = (
-    "commit\tweighted_cv_rmse_mean\tcv_rmse_std\tweighted_cv_auc\tstatus\tnum_params\ttrain_seconds\tdescription\n"
+    "commit\tweighted_cv_rmse_mean\tcv_rmse_std\tweighted_cv_auc\tweighted_cv_pearson_r\tweighted_cv_spearman_r\tstatus\tnum_params\ttrain_seconds\tdescription\n"
 )
 
 ALLOWED_TRAIN_IMPORTS = {
@@ -192,6 +192,8 @@ class RegressionMetrics:
     r2: float
     squared_error_sum: float
     auc: float | None
+    pearson_r: float | None
+    spearman_r: float | None
 
 
 @dataclass(frozen=True)
@@ -217,11 +219,15 @@ class ExperimentSummary:
     weighted_cv_mae_mean: float
     weighted_cv_r2_mean: float | None
     weighted_cv_auc_mean: float | None
+    weighted_cv_pearson_r_mean: float | None
+    weighted_cv_spearman_r_mean: float | None
     pooled_cv_rmse: float
     test_rmse: float | None
     test_mae: float | None
     test_r2: float | None
     test_auc: float | None
+    test_pearson_r: float | None
+    test_spearman_r: float | None
     num_params: int
     train_seconds: float
     feature_dim: int
@@ -306,6 +312,27 @@ def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return 1.0 - (residual / total)
 
 
+def pearson_r_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if y_true.size < 2:
+        return math.nan
+    centered_true = y_true.astype(np.float64) - float(np.mean(y_true))
+    centered_pred = y_pred.astype(np.float64) - float(np.mean(y_pred))
+    denominator = float(
+        np.sqrt(np.sum(np.square(centered_true)) * np.sum(np.square(centered_pred)))
+    )
+    if denominator <= 0:
+        return math.nan
+    return float(np.sum(centered_true * centered_pred) / denominator)
+
+
+def spearman_r_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if y_true.size < 2:
+        return math.nan
+    ranked_true = pd.Series(y_true).rank(method="average").to_numpy(dtype=np.float64)
+    ranked_pred = pd.Series(y_pred).rank(method="average").to_numpy(dtype=np.float64)
+    return pearson_r_score(ranked_true, ranked_pred)
+
+
 def scale_regression_predictions(
     y_pred: np.ndarray,
     metric_config: MetricConfig = METRIC_CONFIG,
@@ -356,6 +383,8 @@ def evaluate_predictions(
         r2=r2_score(y_true, scaled_predictions),
         squared_error_sum=squared_error_sum,
         auc=roc_auc_score_binary(effective_labels, effective_scores),
+        pearson_r=pearson_r_score(y_true, scaled_predictions),
+        spearman_r=spearman_r_score(y_true, scaled_predictions),
     )
 
 
@@ -1189,45 +1218,53 @@ def aggregate_fold_results(
     squared_error_sum = sum(result.metrics.squared_error_sum for result in fold_results)
     total_examples = int(weights.sum())
 
-    valid_r2_values = [
-        (result.metrics.r2, result.count)
-        for result in fold_results
-        if not math.isnan(result.metrics.r2)
-    ]
-    weighted_r2 = None
-    if valid_r2_values:
-        r2_weights = np.array([weight for _, weight in valid_r2_values], dtype=np.float64)
-        weighted_r2 = float(
-            np.average(
-                np.array([value for value, _ in valid_r2_values], dtype=np.float64),
-                weights=r2_weights,
-            )
-        )
+    def weighted_optional_metric_mean(values: list[tuple[float | None, int]]) -> float | None:
+        valid_values = [
+            (value, weight)
+            for value, weight in values
+            if value is not None and not math.isnan(value)
+        ]
+        if not valid_values:
+            return None
+        value_array = np.array([value for value, _ in valid_values], dtype=np.float64)
+        weight_array = np.array([weight for _, weight in valid_values], dtype=np.float64)
+        return float(np.average(value_array, weights=weight_array))
 
-    valid_auc_values = [
-        (result.metrics.auc, result.count)
-        for result in fold_results
-        if result.metrics.auc is not None and not math.isnan(result.metrics.auc)
-    ]
-    weighted_auc = None
-    if valid_auc_values:
-        auc_weights = np.array([weight for _, weight in valid_auc_values], dtype=np.float64)
-        weighted_auc = float(
-            np.average(
-                np.array([value for value, _ in valid_auc_values], dtype=np.float64),
-                weights=auc_weights,
-            )
-        )
+    weighted_r2 = weighted_optional_metric_mean(
+        [(result.metrics.r2, result.count) for result in fold_results]
+    )
+    weighted_auc = weighted_optional_metric_mean(
+        [(result.metrics.auc, result.count) for result in fold_results]
+    )
+    weighted_pearson_r = weighted_optional_metric_mean(
+        [(result.metrics.pearson_r, result.count) for result in fold_results]
+    )
+    weighted_spearman_r = weighted_optional_metric_mean(
+        [(result.metrics.spearman_r, result.count) for result in fold_results]
+    )
 
     weighted_rmse_mean = float(np.average(rmse_values, weights=weights))
+    metric_values: dict[str, float | None] = {
+        "weighted_cv_rmse_mean": weighted_rmse_mean,
+        "weighted_cv_auc": weighted_auc,
+    }
+    if metric_config.primary_metric_name not in metric_values:
+        raise ValueError(f"Unsupported primary metric: {metric_config.primary_metric_name}")
+    primary_metric_value = metric_values[metric_config.primary_metric_name]
+    if primary_metric_value is None:
+        raise ValueError(
+            f"Primary metric {metric_config.primary_metric_name} is undefined for the current fold results."
+        )
     return {
-        "primary_metric_value": weighted_rmse_mean,
+        "primary_metric_value": float(primary_metric_value),
         "weighted_cv_rmse_mean": weighted_rmse_mean,
         "cv_rmse_mean": float(np.mean(rmse_values)),
         "cv_rmse_std": float(np.std(rmse_values)),
         "weighted_cv_mae_mean": float(np.average(mae_values, weights=weights)),
         "weighted_cv_r2_mean": weighted_r2,
         "weighted_cv_auc_mean": weighted_auc,
+        "weighted_cv_pearson_r_mean": weighted_pearson_r,
+        "weighted_cv_spearman_r_mean": weighted_spearman_r,
         "pooled_cv_rmse": float(math.sqrt(squared_error_sum / total_examples)),
         "primary_metric_name": metric_config.primary_metric_name,
     }
@@ -1328,12 +1365,22 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
         print("weighted_cv_auc:     nan")
     else:
         print(f"weighted_cv_auc:     {summary.weighted_cv_auc_mean:.6f}")
+    if summary.weighted_cv_pearson_r_mean is None:
+        print("weighted_cv_pearson_r: nan")
+    else:
+        print(f"weighted_cv_pearson_r: {summary.weighted_cv_pearson_r_mean:.6f}")
+    if summary.weighted_cv_spearman_r_mean is None:
+        print("weighted_cv_spearman_r: nan")
+    else:
+        print(f"weighted_cv_spearman_r: {summary.weighted_cv_spearman_r_mean:.6f}")
     print(f"pooled_cv_rmse:      {summary.pooled_cv_rmse:.6f}")
     if summary.test_rmse is None:
         print("test_rmse:           nan")
         print("test_mae:            nan")
         print("test_r2:             nan")
         print("test_auc:            nan")
+        print("test_pearson_r:      nan")
+        print("test_spearman_r:     nan")
     else:
         print(f"test_rmse:           {summary.test_rmse:.6f}")
         print(f"test_mae:            {summary.test_mae:.6f}")
@@ -1345,6 +1392,14 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
             print("test_auc:            nan")
         else:
             print(f"test_auc:            {summary.test_auc:.6f}")
+        if summary.test_pearson_r is None:
+            print("test_pearson_r:      nan")
+        else:
+            print(f"test_pearson_r:      {summary.test_pearson_r:.6f}")
+        if summary.test_spearman_r is None:
+            print("test_spearman_r:     nan")
+        else:
+            print(f"test_spearman_r:     {summary.test_spearman_r:.6f}")
     print(f"train_seconds:       {summary.train_seconds:.1f}")
     print(f"num_params:          {summary.num_params}")
     print(f"feature_dim:         {summary.feature_dim}")
@@ -1432,6 +1487,16 @@ def run_experiment(
         weighted_cv_auc_mean=(
             None if aggregate["weighted_cv_auc_mean"] is None else float(aggregate["weighted_cv_auc_mean"])
         ),
+        weighted_cv_pearson_r_mean=(
+            None
+            if aggregate["weighted_cv_pearson_r_mean"] is None
+            else float(aggregate["weighted_cv_pearson_r_mean"])
+        ),
+        weighted_cv_spearman_r_mean=(
+            None
+            if aggregate["weighted_cv_spearman_r_mean"] is None
+            else float(aggregate["weighted_cv_spearman_r_mean"])
+        ),
         pooled_cv_rmse=float(aggregate["pooled_cv_rmse"]),
         test_rmse=None if holdout_metrics is None else holdout_metrics.rmse,
         test_mae=None if holdout_metrics is None else holdout_metrics.mae,
@@ -1440,6 +1505,20 @@ def run_experiment(
             None
             if holdout_metrics is None or holdout_metrics.auc is None or math.isnan(holdout_metrics.auc)
             else holdout_metrics.auc
+        ),
+        test_pearson_r=(
+            None
+            if holdout_metrics is None
+            or holdout_metrics.pearson_r is None
+            or math.isnan(holdout_metrics.pearson_r)
+            else holdout_metrics.pearson_r
+        ),
+        test_spearman_r=(
+            None
+            if holdout_metrics is None
+            or holdout_metrics.spearman_r is None
+            or math.isnan(holdout_metrics.spearman_r)
+            else holdout_metrics.spearman_r
         ),
         num_params=num_params,
         train_seconds=time.perf_counter() - start,
