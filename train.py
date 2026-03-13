@@ -11,7 +11,7 @@ ARCHITECTURE = ArchitectureSpec(
     hidden_dims=(256, 128, 64),
     activation="gelu",
     dropout=0.0,
-    normalization="none",
+    normalization="batchnorm",
     use_bias=True,
 )
 
