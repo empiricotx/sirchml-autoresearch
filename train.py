@@ -7,11 +7,11 @@ from prepare import ArchitectureContext, ArchitectureSpec, run_experiment
 
 
 ARCHITECTURE = ArchitectureSpec(
-    family="residual_mlp",
-    hidden_dims=(256, 256, 128),
-    activation="silu",
-    dropout=0.10,
-    normalization="layernorm",
+    family="mlp",
+    hidden_dims=(128, 64),
+    activation="gelu",
+    dropout=0.0,
+    normalization="none",
     use_bias=True,
 )
 
