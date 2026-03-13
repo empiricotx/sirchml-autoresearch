@@ -10,7 +10,7 @@ ARCHITECTURE = ArchitectureSpec(
     family="mlp",
     hidden_dims=(320, 160, 80, 40),
     activation="silu",
-    dropout=0.05,
+    dropout=0.02,
     normalization="none",
     use_bias=True,
 )
