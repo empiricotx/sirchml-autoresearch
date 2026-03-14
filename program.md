@@ -2,13 +2,19 @@
 
 This repo is an autonomous search loop for **siRNA regression architectures**.
 
-## Core rule
+## Core Rule
 
-You may edit **only** `train.py`.
+You may edit **only** `train.py` among source-code files.
+
+You may also create and update generated artifacts under:
+
+- `sessions/`
+- `run.log`
 
 Do not modify:
 
 - `prepare.py`
+- `session_manager.py`
 - `pyproject.toml`
 - dataset files
 - tests
@@ -21,6 +27,20 @@ Do not modify:
 
 Those are fixed by the human and define the experiment boundary.
 
+## Generated Artifact Rule
+
+Do not manually edit generated session artifacts.
+
+These must be created or updated only through `session_manager.py`:
+
+- `session_state.json`
+- `results.tsv`
+- `decision.json`
+- `session_summary.json`
+- `session_summary.md`
+- `synopsis.md`
+- `run_context.json`
+
 ## Objective
 
 Maximize `weighted_cv_auc`.
@@ -29,25 +49,72 @@ Higher is better.
 
 The metric is the weighted mean of per-gene validation AUC values, weighted by the number of evaluation sequences in each held-out gene fold.
 
-## Experiment protocol
+## Session Protocol
 
-1. Read `README.md`, `prepare.py`, and `train.py`.
+1. Read `README.md`, `prepare.py`, `train.py`, and `PLANNED_IMPROVEMENTS.md`.
 2. Confirm the cached dataset exists. If not, tell the human to run `uv run prepare.py`.
-3. Initialize `results.tsv` if it is missing.
-4. Run the unmodified baseline:
+3. Start a session:
 
 ```bash
-uv run train.py > run.log 2>&1
+uv run python session_manager.py start --objective "Maximize weighted_cv_auc" --initiated-by agent
 ```
 
-5. Extract the metric from `run.log`.
-6. Log the result in `results.tsv`.
-7. Edit only `train.py`.
-8. Run one experiment at a time.
-9. Keep the commit only if `weighted_cv_auc` improves by more than the configured epsilon.
-10. If the score is worse or unchanged, revert the `train.py` change.
+4. Run the unmodified baseline as the base run:
 
-## What you are allowed to change
+```bash
+uv run python session_manager.py run \
+  --session-id <session_id> \
+  --run-role base \
+  --hypothesis "Establish the baseline incumbent for this session." \
+  --mutation-summary "Unmodified baseline architecture." \
+  --description "Base run"
+```
+
+5. Before each candidate run, define:
+   - `parent_run_id`
+   - `compared_against_run_id`
+   - `hypothesis`
+   - `mutation_summary`
+   - `description`
+
+6. Edit only `train.py`.
+7. Run exactly one candidate at a time through `session_manager.py`:
+
+```bash
+uv run python session_manager.py run \
+  --session-id <session_id> \
+  --run-role candidate \
+  --parent-run-id <parent_run_id> \
+  --compared-against-run-id <compared_against_run_id> \
+  --hypothesis "<hypothesis>" \
+  --mutation-summary "<mutation_summary>" \
+  --description "<description>"
+```
+
+8. Inspect the reported decision.
+9. After every run, restore `train.py` to the current incumbent:
+
+```bash
+uv run python session_manager.py sync-incumbent --session-id <session_id>
+```
+
+10. Use session status when needed:
+
+```bash
+uv run python session_manager.py status --session-id <session_id>
+```
+
+11. Continue until a stopping condition is met.
+12. Finalize the session:
+
+```bash
+uv run python session_manager.py finalize \
+  --session-id <session_id> \
+  --status completed \
+  --end-reason "<reason>"
+```
+
+## Allowed Architecture Changes
 
 Only architecture:
 
@@ -59,7 +126,7 @@ Only architecture:
 - dropout amount
 - module structure inside `build_model`
 
-## What you are not allowed to change
+## Forbidden Changes
 
 You must not change:
 
@@ -77,13 +144,20 @@ You must not change:
 - time budget
 - metric definitions
 - architecture constraints in `prepare.py`
+- generated session metadata by hand
 
-## Result logging
+## Result Logging
 
-Use `results.tsv` with the header:
+Use `sessions/<session_id>/results.tsv` as the canonical run ledger.
+
+Never append rows manually.
+
+Let `session_manager.py run` append one row after each run.
+
+The session-local header is:
 
 ```text
-commit	weighted_cv_rmse_mean	cv_rmse_std	weighted_cv_auc	weighted_cv_pearson_r	weighted_cv_spearman_r	status	num_params	train_seconds	description
+session_id	session_run_index	run_id	run_role	parent_run_id	compared_against_run_id	commit	weighted_cv_rmse_mean	cv_rmse_std	weighted_cv_auc	weighted_cv_pearson_r	weighted_cv_spearman_r	status	num_params	train_seconds	decision_baseline_value	decision_delta	hypothesis	mutation_summary	description	run_dir
 ```
 
 Use status values:
@@ -92,15 +166,25 @@ Use status values:
 - `discard`
 - `crash`
 
-## Crash handling
+## Decision Rule
 
-If the run crashes:
+Keep the run only if `weighted_cv_auc` improves by more than the configured epsilon.
 
-1. Read `run.log`.
-2. If the issue is a simple architecture bug in `train.py`, fix it and rerun.
-3. If the idea itself is broken, log a `crash` result and move on.
+Do not override the decision rule with secondary metrics.
 
-## Simplicity rule
+Use the secondary metrics only to interpret the result and guide the next mutation.
+
+## Crash Handling
+
+If a run crashes:
+
+1. Read the generated failure artifact in the run directory.
+2. If the issue is a simple architecture bug in `train.py`, fix it and rerun as a new run.
+3. Let `session_manager.py run` record the `crash` metadata and session-local results row.
+4. Run `sync-incumbent` before the next mutation.
+5. Finalize the session if crashes or instability make further search unproductive.
+
+## Simplicity Rule
 
 If two architectures perform similarly, prefer the simpler one:
 
@@ -108,4 +192,6 @@ If two architectures perform similarly, prefer the simpler one:
 - fewer parameters
 - less brittle code
 
-The point of the loop is not to make the code clever. The point is to find better architectures under a fixed evaluation harness.
+If a more complex model does not clearly justify itself on `weighted_cv_auc`, keep the simpler incumbent and note the tradeoff in the session summary.
+
+The point of the loop is not to make the code clever. The point is to find better architectures under a fixed evaluation harness while leaving behind a session artifact that the next agent can use directly.

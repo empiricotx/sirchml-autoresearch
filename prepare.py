@@ -8,7 +8,7 @@ import math
 import pickle
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol
@@ -197,6 +197,15 @@ class RegressionMetrics:
 
 
 @dataclass(frozen=True)
+class FoldDiagnostics:
+    scaled_prediction_mean: float | None = None
+    scaled_prediction_std: float | None = None
+    clipped_low_fraction: float | None = None
+    clipped_high_fraction: float | None = None
+    effective_positive_rate: float | None = None
+
+
+@dataclass(frozen=True)
 class FoldResult:
     gene: str
     count: int
@@ -205,6 +214,7 @@ class FoldResult:
     epochs: int
     best_epoch: int
     num_params: int
+    diagnostics: FoldDiagnostics = field(default_factory=FoldDiagnostics)
 
 
 @dataclass(frozen=True)
@@ -275,7 +285,6 @@ def _config_fingerprint() -> str:
 def ensure_runtime_dirs() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    ensure_results_tsv()
 
 
 def ensure_results_tsv() -> None:
@@ -351,6 +360,22 @@ def binary_effective_labels(
     return (y_true < metric_config.effective_threshold).astype(np.int8)
 
 
+def build_fold_diagnostics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metric_config: MetricConfig = METRIC_CONFIG,
+) -> FoldDiagnostics:
+    scaled_predictions = scale_regression_predictions(y_pred, metric_config)
+    effective_labels = binary_effective_labels(y_true, metric_config)
+    return FoldDiagnostics(
+        scaled_prediction_mean=float(np.mean(scaled_predictions)),
+        scaled_prediction_std=float(np.std(scaled_predictions)),
+        clipped_low_fraction=float(np.mean(scaled_predictions == 0.0)),
+        clipped_high_fraction=float(np.mean(scaled_predictions == 1.0)),
+        effective_positive_rate=float(np.mean(effective_labels)),
+    )
+
+
 def roc_auc_score_binary(y_true: np.ndarray, y_score: np.ndarray) -> float:
     if y_true.ndim != 1 or y_score.ndim != 1:
         raise ValueError("roc_auc_score_binary expects 1D arrays.")
@@ -403,9 +428,10 @@ def _normalize_model_output(output: torch.Tensor) -> torch.Tensor:
     )
 
 
-def _make_run_dir() -> Path:
+def _make_run_dir(root: Path | None = None) -> Path:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    run_dir = RUNS_DIR / timestamp
+    run_root = root or RUNS_DIR
+    run_dir = run_root / timestamp
     run_dir.mkdir(parents=True, exist_ok=False)
     return run_dir
 
@@ -1092,6 +1118,7 @@ def train_fold(
     )
 
     best_metrics: RegressionMetrics | None = None
+    best_diagnostics: FoldDiagnostics | None = None
     best_state: dict[str, torch.Tensor] | None = None
     best_epoch = 0
     deadline = time.perf_counter() + budget_seconds
@@ -1113,12 +1140,13 @@ def train_fold(
         metrics = evaluate_predictions(val_target, val_prediction)
         if best_metrics is None or metrics.rmse < best_metrics.rmse:
             best_metrics = metrics
+            best_diagnostics = build_fold_diagnostics(val_target, val_prediction)
             best_epoch = epoch
             best_state = _state_dict_to_cpu(model)
         if time.perf_counter() >= deadline:
             break
 
-    if best_state is None or best_metrics is None:
+    if best_state is None or best_metrics is None or best_diagnostics is None:
         raise RuntimeError("Fold training did not produce any validation metrics.")
 
     model.load_state_dict(best_state)
@@ -1131,6 +1159,7 @@ def train_fold(
         epochs=epoch,
         best_epoch=best_epoch,
         num_params=num_params,
+        diagnostics=best_diagnostics,
     )
 
 
@@ -1270,6 +1299,121 @@ def aggregate_fold_results(
     }
 
 
+def _is_defined(value: float | None) -> bool:
+    return value is not None and not math.isnan(value)
+
+
+def _pick_fold_by_metric(
+    fold_results: list[FoldResult],
+    *,
+    metric_name: str,
+    reverse: bool,
+) -> dict[str, Any] | None:
+    candidates: list[tuple[FoldResult, float]] = []
+    for result in fold_results:
+        value = getattr(result.metrics, metric_name)
+        if _is_defined(value):
+            candidates.append((result, float(value)))
+    if not candidates:
+        return None
+    selected_result, selected_value = sorted(
+        candidates,
+        key=lambda item: item[1],
+        reverse=reverse,
+    )[0]
+    return {
+        "gene": selected_result.gene,
+        "count": selected_result.count,
+        metric_name: selected_value,
+    }
+
+
+def build_run_diagnostics(fold_results: list[FoldResult]) -> dict[str, Any]:
+    fold_sizes = np.array([result.count for result in fold_results], dtype=np.float64)
+    epochs = np.array([result.epochs for result in fold_results], dtype=np.float64)
+    best_epochs = np.array([result.best_epoch for result in fold_results], dtype=np.float64)
+
+    def weighted_optional_diagnostic_mean(values: list[tuple[float | None, int]]) -> float | None:
+        valid_values = [
+            (value, weight)
+            for value, weight in values
+            if value is not None
+        ]
+        if not valid_values:
+            return None
+        value_array = np.array([value for value, _ in valid_values], dtype=np.float64)
+        weight_array = np.array([weight for _, weight in valid_values], dtype=np.float64)
+        return float(np.average(value_array, weights=weight_array))
+
+    return {
+        "fold_count": len(fold_results),
+        "fold_sizes": {
+            "min": int(np.min(fold_sizes)),
+            "median": float(np.median(fold_sizes)),
+            "max": int(np.max(fold_sizes)),
+        },
+        "nan_metric_counts": {
+            "auc": sum(not _is_defined(result.metrics.auc) for result in fold_results),
+            "pearson_r": sum(not _is_defined(result.metrics.pearson_r) for result in fold_results),
+            "spearman_r": sum(not _is_defined(result.metrics.spearman_r) for result in fold_results),
+        },
+        "best_auc_fold": _pick_fold_by_metric(fold_results, metric_name="auc", reverse=True),
+        "worst_auc_fold": _pick_fold_by_metric(fold_results, metric_name="auc", reverse=False),
+        "best_rmse_fold": _pick_fold_by_metric(fold_results, metric_name="rmse", reverse=False),
+        "worst_rmse_fold": _pick_fold_by_metric(fold_results, metric_name="rmse", reverse=True),
+        "largest_gene_fold": {
+            "gene": max(fold_results, key=lambda result: result.count).gene,
+            "count": max(fold_results, key=lambda result: result.count).count,
+        },
+        "smallest_gene_fold": {
+            "gene": min(fold_results, key=lambda result: result.count).gene,
+            "count": min(fold_results, key=lambda result: result.count).count,
+        },
+        "training_dynamics": {
+            "epoch_count_min": int(np.min(epochs)),
+            "epoch_count_median": float(np.median(epochs)),
+            "epoch_count_max": int(np.max(epochs)),
+            "best_epoch_min": int(np.min(best_epochs)),
+            "best_epoch_median": float(np.median(best_epochs)),
+            "best_epoch_max": int(np.max(best_epochs)),
+            "best_epoch_ratio_mean": float(np.mean(best_epochs / epochs)),
+            "seconds_per_fold_mean": float(np.mean([result.train_seconds for result in fold_results])),
+        },
+        "prediction_behavior": {
+            "weighted_scaled_prediction_mean": weighted_optional_diagnostic_mean(
+                [
+                    (result.diagnostics.scaled_prediction_mean, result.count)
+                    for result in fold_results
+                ]
+            ),
+            "weighted_scaled_prediction_std": weighted_optional_diagnostic_mean(
+                [
+                    (result.diagnostics.scaled_prediction_std, result.count)
+                    for result in fold_results
+                ]
+            ),
+            "weighted_clipped_low_fraction": weighted_optional_diagnostic_mean(
+                [
+                    (result.diagnostics.clipped_low_fraction, result.count)
+                    for result in fold_results
+                ]
+            ),
+            "weighted_clipped_high_fraction": weighted_optional_diagnostic_mean(
+                [
+                    (result.diagnostics.clipped_high_fraction, result.count)
+                    for result in fold_results
+                ]
+            ),
+            "weighted_effective_positive_rate": weighted_optional_diagnostic_mean(
+                [
+                    (result.diagnostics.effective_positive_rate, result.count)
+                    for result in fold_results
+                ]
+            ),
+        },
+    }
+
+
 def validate_budget(
     num_folds: int,
     *,
@@ -1317,6 +1461,7 @@ def save_run_summary(
     architecture: ArchitectureSpec,
     *,
     run_dir: Path,
+    latest_summary_path: Path | None = None,
 ) -> None:
     payload = {
         "summary": asdict(summary),
@@ -1330,9 +1475,11 @@ def save_run_summary(
                 "best_epoch": result.best_epoch,
                 "num_params": result.num_params,
                 "metrics": asdict(result.metrics),
+                "diagnostics": asdict(result.diagnostics),
             }
             for result in fold_results
         ],
+        "diagnostics": build_run_diagnostics(fold_results),
         "constraints": asdict(ARCHITECTURE_CONSTRAINTS),
         "training_config": asdict(TRAINING_CONFIG),
         "dataset_config": asdict(DATASET_CONFIG),
@@ -1343,7 +1490,9 @@ def save_run_summary(
         json.dumps(payload, indent=2, sort_keys=True, default=_json_default),
         encoding="utf-8",
     )
-    RUNS_DIR.joinpath("latest_summary.json").write_text(
+    target_latest_summary_path = latest_summary_path or RUNS_DIR.joinpath("latest_summary.json")
+    target_latest_summary_path.parent.mkdir(parents=True, exist_ok=True)
+    target_latest_summary_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, default=_json_default),
         encoding="utf-8",
     )
@@ -1419,6 +1568,8 @@ def run_experiment(
     training_config: TrainingConfig = TRAINING_CONFIG,
     metric_config: MetricConfig = METRIC_CONFIG,
     constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
+    run_dir: Path | None = None,
+    latest_summary_path: Path | None = None,
 ) -> ExperimentSummary:
     ensure_runtime_dirs()
 
@@ -1471,7 +1622,11 @@ def run_experiment(
             budget_seconds=final_budget,
         )
 
-    run_dir = _make_run_dir()
+    active_run_dir = run_dir
+    if active_run_dir is None:
+        active_run_dir = _make_run_dir()
+    else:
+        active_run_dir.mkdir(parents=True, exist_ok=True)
     summary = ExperimentSummary(
         primary_metric_name=str(aggregate["primary_metric_name"]),
         primary_metric_value=float(aggregate["primary_metric_value"]),
@@ -1528,9 +1683,15 @@ def run_experiment(
         train_genes=prepared.train_genes,
         test_genes=prepared.test_genes,
         cv_genes=prepared.cv_genes,
-        run_dir=str(run_dir),
+        run_dir=str(active_run_dir),
     )
-    save_run_summary(summary, fold_results, architecture, run_dir=run_dir)
+    save_run_summary(
+        summary,
+        fold_results,
+        architecture,
+        run_dir=active_run_dir,
+        latest_summary_path=latest_summary_path,
+    )
     print_experiment_summary(summary)
     return summary
 

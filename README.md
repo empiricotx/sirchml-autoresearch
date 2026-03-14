@@ -5,6 +5,7 @@ This repo is a small autonomous experimentation harness for **tabular siRNA regr
 The design goal is strict separation of responsibilities:
 
 - `prepare.py` is the fixed evaluation harness.
+- `session_manager.py` is the session orchestration layer.
 - `train.py` is the only file the agent edits.
 - `program.md` is the runbook for the autonomous loop.
 
@@ -27,9 +28,15 @@ The agent is constrained to model architecture only. Dataset loading, sequence f
    - reports the primary metric `weighted_cv_auc`
    - optionally trains once on the full train split and reports a final holdout test metric
 
-3. The autonomous agent loop in `program.md`
+3. `uv run python session_manager.py ...`
+   - creates and manages search sessions under `sessions/`
+   - allocates per-run directories inside each session
+   - records per-session `results.tsv`, `decision.json`, `synopsis.md`, and final session summaries
+   - keeps or discards runs based on `weighted_cv_auc`
+
+4. The autonomous agent loop in `program.md`
    - edits only `train.py`
-   - runs `uv run train.py`
+   - executes runs through `session_manager.py`
    - compares `weighted_cv_auc`
    - keeps the change only if the metric improves
 
@@ -110,10 +117,13 @@ uv sync
 # 3. Build and cache the prepared dataset
 uv run prepare.py
 
-# 4. Run a single fixed-budget experiment
+# 4. Run a single fixed-budget experiment directly
 uv run train.py
 
-# 5. Run tests
+# 5. Start a managed search session
+uv run python session_manager.py start
+
+# 6. Run tests
 pytest
 ```
 
@@ -121,8 +131,10 @@ pytest
 
 ```text
 prepare.py      fixed dataset prep, CV, metrics, constraints, training harness
+session_manager.py  session orchestration, session artifacts, and decision logging
 train.py        editable architecture module and run entrypoint
 program.md      autonomous agent instructions
+sessions/       generated per-session run artifacts and summaries
 data/README.md  expected raw dataset schema
 tests/          focused tests for the fixed harness
 ```
@@ -132,3 +144,5 @@ tests/          focused tests for the fixed harness
 - Each CV fold is one held-out gene based on `transcript_gene`.
 - By default there is no extra outer test split; all genes participate in gene-held-out CV.
 - The selection metric is weighted cross-validation, not a random row split.
+- `sessions/<session_id>/results.tsv` is the canonical tabular ledger for autonomous search sessions.
+- `uv run train.py` remains available for one-off manual experiments outside the session workflow.

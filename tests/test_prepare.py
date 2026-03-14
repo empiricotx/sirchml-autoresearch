@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
+from torch import nn
 
+import prepare as prepare_module
 from prepare import (
     ArchitectureSpec,
     DatasetConfig,
     FoldResult,
     MetricConfig,
     RegressionMetrics,
+    TrainingConfig,
     evaluate_predictions,
     SplitConfig,
     aggregate_fold_results,
     build_cv_folds,
     build_prepared_dataset_from_frame,
     load_train_definition,
+    run_experiment,
     scale_regression_predictions,
     validate_architecture_spec,
     validate_train_source,
@@ -42,9 +48,43 @@ def make_dataset() -> pd.DataFrame:
     )
 
 
+def make_auc_ready_dataset() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "gene": [
+                "GENE1",
+                "GENE1",
+                "GENE1",
+                "GENE1",
+                "GENE2",
+                "GENE2",
+                "GENE2",
+                "GENE2",
+                "GENE3",
+                "GENE3",
+            ],
+            "target": [0.2, 0.6, 0.25, 0.7, 0.1, 0.8, 0.3, 0.9, 0.2, 0.5],
+            "sirna_sequence": [
+                "AUGCUA",
+                "AUGCAA",
+                "AUGCUG",
+                "AUGCUC",
+                "CCGAUU",
+                "CCGAUC",
+                "CCGAUA",
+                "CCGAUG",
+                "UUUGGA",
+                "UUUGGC",
+            ],
+            "feature_score": [1.0, 1.5, 1.2, 1.7, 2.0, 2.5, 2.1, 2.6, 0.4, 0.6],
+            "cell_line": ["A", "A", "A", "A", "B", "B", "B", "B", "A", "C"],
+        }
+    )
+
+
 def test_build_prepared_dataset_respects_gene_splits() -> None:
     prepared = build_prepared_dataset_from_frame(
-        make_dataset(),
+        make_auc_ready_dataset(),
         dataset_config=DatasetConfig(
             raw_data_path=Path("data/mock.csv"),
             target_column="target",
@@ -69,7 +109,7 @@ def test_build_prepared_dataset_respects_gene_splits() -> None:
 
 def test_build_cv_folds_holds_out_one_gene_per_fold() -> None:
     prepared = build_prepared_dataset_from_frame(
-        make_dataset(),
+        make_auc_ready_dataset(),
         dataset_config=DatasetConfig(
             raw_data_path=Path("data/mock.csv"),
             target_column="target",
@@ -230,3 +270,113 @@ def test_actual_train_module_matches_contract() -> None:
 
     assert isinstance(loaded.spec, ArchitectureSpec)
     validate_architecture_spec(loaded.spec)
+
+
+def test_run_experiment_writes_to_custom_run_dir_and_diagnostics(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    prepared = build_prepared_dataset_from_frame(
+        make_auc_ready_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence",),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            max_sequence_length=6,
+        ),
+    )
+    monkeypatch.setattr(prepare_module, "prepare_dataset", lambda *args, **kwargs: prepared)
+
+    def build_model(context) -> nn.Module:
+        return nn.Linear(context.input_dim, context.output_dim)
+
+    custom_run_dir = tmp_path / "sessions" / "session-1" / "runs" / "000_base__run"
+    latest_summary_path = tmp_path / "latest_summary.json"
+    summary = run_experiment(
+        architecture=ArchitectureSpec(
+            family="mlp",
+            hidden_dims=(8,),
+            activation="relu",
+            dropout=0.0,
+            normalization="none",
+            use_bias=True,
+        ),
+        build_model=build_model,
+        training_config=TrainingConfig(
+            total_time_budget_seconds=0.02,
+            cv_budget_ratio=1.0,
+            evaluate_test_split=False,
+            batch_size=2,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            grad_clip_norm=None,
+            min_fold_budget_seconds=0.0,
+            min_final_fit_budget_seconds=0.0,
+            device="cpu",
+        ),
+        run_dir=custom_run_dir,
+        latest_summary_path=latest_summary_path,
+    )
+
+    payload = json.loads(custom_run_dir.joinpath("summary.json").read_text(encoding="utf-8"))
+    assert summary.run_dir == str(custom_run_dir)
+    assert payload["diagnostics"]["fold_count"] == 2
+    assert "prediction_behavior" in payload["diagnostics"]
+    assert latest_summary_path.exists()
+
+
+def test_run_experiment_compatibility_without_custom_run_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    prepared = build_prepared_dataset_from_frame(
+        make_auc_ready_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence",),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            max_sequence_length=6,
+        ),
+    )
+    monkeypatch.setattr(prepare_module, "prepare_dataset", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(prepare_module, "RUNS_DIR", tmp_path / "runs")
+
+    def build_model(context) -> nn.Module:
+        torch.manual_seed(0)
+        return nn.Linear(context.input_dim, context.output_dim)
+
+    summary = run_experiment(
+        architecture=ArchitectureSpec(
+            family="mlp",
+            hidden_dims=(8,),
+            activation="relu",
+            dropout=0.0,
+            normalization="none",
+            use_bias=True,
+        ),
+        build_model=build_model,
+        training_config=TrainingConfig(
+            total_time_budget_seconds=0.02,
+            cv_budget_ratio=1.0,
+            evaluate_test_split=False,
+            batch_size=2,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            grad_clip_norm=None,
+            min_fold_budget_seconds=0.0,
+            min_final_fit_budget_seconds=0.0,
+            device="cpu",
+        ),
+    )
+
+    run_dir = Path(summary.run_dir)
+    assert run_dir.parent == tmp_path / "runs"
+    assert run_dir.joinpath("summary.json").exists()

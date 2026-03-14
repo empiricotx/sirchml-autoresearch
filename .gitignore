@@ -13,6 +13,7 @@ results/
 queue/
 .cache/
 runs/
+sessions/
 
 # Agent prompt files (generated per-session by launchers)
 CLAUDE.md
