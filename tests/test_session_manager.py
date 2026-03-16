@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -46,21 +47,32 @@ def session_env(tmp_path: Path, monkeypatch):
     }
 
 
-def _write_fake_summary(run_dir: Path, metric_value: float, *, num_params: int = 123) -> ExperimentSummary:
+def _write_fake_summary(
+    run_dir: Path,
+    metric_value: float,
+    *,
+    weighted_cv_rmse_mean: float = 0.31,
+    cv_rmse_std: float = 0.02,
+    weighted_cv_pearson_r_mean: float | None = 0.2,
+    weighted_cv_spearman_r_mean: float | None = 0.25,
+    num_params: int = 123,
+    train_seconds: float = 1.5,
+    diagnostics: dict[str, Any] | None = None,
+) -> ExperimentSummary:
     summary = ExperimentSummary(
         primary_metric_name="weighted_cv_auc",
         primary_metric_value=metric_value,
         metric_direction="higher_is_better",
         improvement_epsilon=1e-4,
-        weighted_cv_rmse_mean=0.31,
-        cv_rmse_mean=0.31,
-        cv_rmse_std=0.02,
+        weighted_cv_rmse_mean=weighted_cv_rmse_mean,
+        cv_rmse_mean=weighted_cv_rmse_mean,
+        cv_rmse_std=cv_rmse_std,
         weighted_cv_mae_mean=0.22,
         weighted_cv_r2_mean=0.1,
         weighted_cv_auc_mean=metric_value,
-        weighted_cv_pearson_r_mean=0.2,
-        weighted_cv_spearman_r_mean=0.25,
-        pooled_cv_rmse=0.30,
+        weighted_cv_pearson_r_mean=weighted_cv_pearson_r_mean,
+        weighted_cv_spearman_r_mean=weighted_cv_spearman_r_mean,
+        pooled_cv_rmse=weighted_cv_rmse_mean,
         test_rmse=None,
         test_mae=None,
         test_r2=None,
@@ -68,7 +80,7 @@ def _write_fake_summary(run_dir: Path, metric_value: float, *, num_params: int =
         test_pearson_r=None,
         test_spearman_r=None,
         num_params=num_params,
-        train_seconds=1.5,
+        train_seconds=train_seconds,
         feature_dim=3,
         num_rows=6,
         cv_folds=2,
@@ -102,11 +114,13 @@ def _write_fake_summary(run_dir: Path, metric_value: float, *, num_params: int =
         "split_config": {},
         "metric_config": {},
     }
+    if diagnostics is not None:
+        payload["diagnostics"] = diagnostics
     run_dir.joinpath("summary.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return summary
 
 
-def _fake_run_experiment_factory(outcomes: list[float | Exception]):
+def _fake_run_experiment_factory(outcomes: list[float | Exception | dict[str, Any]]):
     outcome_iter = iter(outcomes)
 
     def fake_run_experiment(*, run_dir=None, latest_summary_path=None, **kwargs):
@@ -115,6 +129,10 @@ def _fake_run_experiment_factory(outcomes: list[float | Exception]):
             raise outcome
         assert run_dir is not None
         run_dir.mkdir(parents=True, exist_ok=True)
+        if isinstance(outcome, dict):
+            outcome_payload = dict(outcome)
+            metric_value = float(outcome_payload.pop("metric_value"))
+            return _write_fake_summary(run_dir, metric_value, **outcome_payload)
         return _write_fake_summary(run_dir, outcome)
 
     return fake_run_experiment
@@ -152,6 +170,30 @@ def _run_base(session_id: str) -> int:
     )
 
 
+def _run_candidate(
+    session_id: str,
+    *,
+    hypothesis: str = "Try a candidate.",
+    mutation_summary: str = "Candidate mutation.",
+    description: str = "Candidate run",
+) -> int:
+    return session_manager.main(
+        [
+            "run",
+            "--session-id",
+            session_id,
+            "--run-role",
+            "candidate",
+            "--hypothesis",
+            hypothesis,
+            "--mutation-summary",
+            mutation_summary,
+            "--description",
+            description,
+        ]
+    )
+
+
 def test_start_creates_session_artifacts(session_env) -> None:
     session_id = "session-001"
     _start_session(session_id)
@@ -180,6 +222,142 @@ def test_base_run_creates_expected_artifacts(session_env, monkeypatch) -> None:
     assert run_dir.joinpath("synopsis.md").exists()
     results_lines = session_manager._session_results_path(session_id).read_text(encoding="utf-8").strip().splitlines()
     assert len(results_lines) == 2
+
+
+def test_mixed_signal_synopsis_marks_partial_support_and_base_context(
+    session_env,
+    monkeypatch,
+) -> None:
+    session_id = "session-interpret-001"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {"metric_value": 0.65, "weighted_cv_rmse_mean": 0.31, "weighted_cv_pearson_r_mean": 0.20, "weighted_cv_spearman_r_mean": 0.25},
+                {"metric_value": 0.70, "weighted_cv_rmse_mean": 0.30, "weighted_cv_pearson_r_mean": 0.21, "weighted_cv_spearman_r_mean": 0.26},
+                {"metric_value": 0.6985, "weighted_cv_rmse_mean": 0.295, "weighted_cv_pearson_r_mean": 0.24, "weighted_cv_spearman_r_mean": 0.29},
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Try the first improving candidate.",
+        mutation_summary="Keep candidate mutation.",
+        description="Keep candidate",
+    ) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Probe a mixed-signal mutation.",
+        mutation_summary="Mixed-signal candidate mutation.",
+        description="Mixed-signal candidate",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    candidate_run_dir = Path(state.run_dirs[state.ordered_run_ids[-1]])
+    decision_payload = json.loads(candidate_run_dir.joinpath("decision.json").read_text(encoding="utf-8"))
+    synopsis = candidate_run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+
+    assert decision_payload["hypothesis_result"] == "partially_supported"
+    assert "Metric tradeoff: this was a `near miss` and a `mixed signal`;" in synopsis
+    assert "Hypothesis assessment: `partially_supported`" in synopsis
+    assert "Session context: despite losing to the compared run, this candidate still outperformed the session base on `weighted_cv_auc`." in synopsis
+    assert "| vs base " in synopsis
+
+
+def test_keep_synopsis_calls_out_threshold_separation_tradeoff(
+    session_env,
+    monkeypatch,
+) -> None:
+    session_id = "session-interpret-002"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {"metric_value": 0.65, "weighted_cv_rmse_mean": 0.31, "weighted_cv_pearson_r_mean": 0.20, "weighted_cv_spearman_r_mean": 0.25},
+                {"metric_value": 0.661, "weighted_cv_rmse_mean": 0.34, "weighted_cv_pearson_r_mean": 0.19, "weighted_cv_spearman_r_mean": 0.24},
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Try a brittle AUC win.",
+        mutation_summary="Brittle keep candidate mutation.",
+        description="Brittle keep candidate",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    kept_run_dir = Path(state.run_dirs[state.ordered_run_ids[-1]])
+    decision_payload = json.loads(kept_run_dir.joinpath("decision.json").read_text(encoding="utf-8"))
+    synopsis = kept_run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+
+    assert decision_payload["hypothesis_result"] == "supported"
+    assert "Metric tradeoff: this was a `brittle gain`; `weighted_cv_auc` improved while `weighted_cv_rmse_mean` worsened." in synopsis
+    assert "Metric tradeoff: this looks like a `threshold-separation gain` rather than a broad regression improvement." in synopsis
+
+
+def test_synopsis_flags_robustness_and_metric_coverage_regressions(
+    session_env,
+    monkeypatch,
+) -> None:
+    session_id = "session-interpret-003"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {
+                    "metric_value": 0.65,
+                    "weighted_cv_rmse_mean": 0.31,
+                    "cv_rmse_std": 0.02,
+                    "diagnostics": {
+                        "fold_count": 2,
+                        "nan_metric_counts": {"auc": 0, "pearson_r": 0, "spearman_r": 0},
+                        "best_auc_fold": {"gene": "GENE1", "count": 3, "auc": 0.70},
+                        "worst_auc_fold": {"gene": "GENE2", "count": 3, "auc": 0.68},
+                        "best_rmse_fold": {"gene": "GENE1", "count": 3, "rmse": 0.20},
+                        "worst_rmse_fold": {"gene": "GENE2", "count": 3, "rmse": 0.23},
+                    },
+                },
+                {
+                    "metric_value": 0.64,
+                    "weighted_cv_rmse_mean": 0.32,
+                    "cv_rmse_std": 0.05,
+                    "diagnostics": {
+                        "fold_count": 2,
+                        "nan_metric_counts": {"auc": 2, "pearson_r": 1, "spearman_r": 1},
+                        "best_auc_fold": {"gene": "GENE1", "count": 3, "auc": 0.95},
+                        "worst_auc_fold": {"gene": "GENE2", "count": 3, "auc": 0.10},
+                        "best_rmse_fold": {"gene": "GENE1", "count": 3, "rmse": 0.10},
+                        "worst_rmse_fold": {"gene": "GENE2", "count": 3, "rmse": 0.45},
+                    },
+                },
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Trigger robustness regressions.",
+        mutation_summary="Robustness regression candidate mutation.",
+        description="Robustness regression candidate",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    candidate_run_dir = Path(state.run_dirs[state.ordered_run_ids[-1]])
+    synopsis = candidate_run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+
+    assert "metric coverage became less informative." in synopsis
+    assert "fold variability worsened relative to the compared run." in synopsis
 
 
 def test_kept_run_updates_incumbent(session_env, monkeypatch) -> None:
@@ -275,6 +453,10 @@ def test_crashed_run_records_failure(session_env, monkeypatch) -> None:
     assert state.crash_count == 1
     assert state.run_statuses[crashed_run_id] == "crash"
     assert crashed_run_dir.joinpath("failure.json").exists()
+    crash_synopsis = crashed_run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+    assert "This run crashed before a summary was written." in crash_synopsis
+    assert "Metric tradeoff:" not in crash_synopsis
+    assert "Hypothesis assessment:" not in crash_synopsis
     results_lines = session_manager._session_results_path(session_id).read_text(encoding="utf-8").strip().splitlines()
     assert len(results_lines) == 3
 
