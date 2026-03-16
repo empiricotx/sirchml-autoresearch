@@ -40,6 +40,8 @@ These must be created or updated only through `session_manager.py`:
 - `session_summary.md`
 - `synopsis.md`
 - `run_context.json`
+- `analysis_input.json`
+- `agent_analysis.json`
 
 ## Objective
 
@@ -91,21 +93,44 @@ uv run python session_manager.py run \
   --description "<description>"
 ```
 
-8. Inspect the reported decision.
-9. After every run, restore `train.py` to the current incumbent:
+8. Inspect the reported decision and the generated `analysis_input.json` for that run.
+9. Record agent analysis through `session_manager.py` before syncing the incumbent:
+
+```bash
+uv run python session_manager.py analyze-run \
+  --session-id <session_id> \
+  --run-id <run_id> \
+  --summary-label "<short label>" \
+  --freeform-analysis "<brief analysis that references concrete metric movement>" \
+  --likely-helped "<factor that may have helped>" \
+  --likely-helped "<optional second factor>" \
+  --likely-hurt "<factor that may have hurt>" \
+  --confidence <0.0_to_1.0> \
+  --next-step-reasoning "<1-2 concrete next-step sentences>"
+```
+
+Rules for `analyze-run`:
+
+- do not override the AUC-only keep/discard decision
+- reference concrete metric deltas from `analysis_input.json`
+- keep the free-form analysis concise
+- suggest only one or two follow-up ideas
+- do not edit `agent_analysis.json` or `synopsis.md` by hand
+
+10. After recording agent analysis, restore `train.py` to the current incumbent:
 
 ```bash
 uv run python session_manager.py sync-incumbent --session-id <session_id>
 ```
 
-10. Use session status when needed:
+11. Use session status when needed:
 
 ```bash
 uv run python session_manager.py status --session-id <session_id>
 ```
 
-11. Continue until a stopping condition is met.
-12. Finalize the session:
+12. Continue until a stopping condition is met.
+13. Finalize the session:
 
 ```bash
 uv run python session_manager.py finalize \

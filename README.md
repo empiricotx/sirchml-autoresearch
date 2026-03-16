@@ -31,7 +31,7 @@ The agent is constrained to model architecture only. Dataset loading, sequence f
 3. `uv run python session_manager.py ...`
    - creates and manages search sessions under `sessions/`
    - allocates per-run directories inside each session
-   - records per-session `results.tsv`, `decision.json`, `synopsis.md`, and final session summaries
+   - records per-session `results.tsv`, `decision.json`, `analysis_input.json`, `agent_analysis.json`, `synopsis.md`, and final session summaries
    - keeps or discards runs based on `weighted_cv_auc`
 
 4. The autonomous agent loop in `program.md`
@@ -145,4 +145,5 @@ tests/          focused tests for the fixed harness
 - By default there is no extra outer test split; all genes participate in gene-held-out CV.
 - The selection metric is weighted cross-validation, not a random row split.
 - `sessions/<session_id>/results.tsv` is the canonical tabular ledger for autonomous search sessions.
+- Each run can also carry `analysis_input.json` plus a command-owned `agent_analysis.json` that is rendered back into `synopsis.md`.
 - `uv run train.py` remains available for one-off manual experiments outside the session workflow.

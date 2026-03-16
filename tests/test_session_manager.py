@@ -219,9 +219,111 @@ def test_base_run_creates_expected_artifacts(session_env, monkeypatch) -> None:
     assert run_dir.joinpath("run_context.json").exists()
     assert run_dir.joinpath("summary.json").exists()
     assert run_dir.joinpath("decision.json").exists()
+    assert run_dir.joinpath("analysis_input.json").exists()
     assert run_dir.joinpath("synopsis.md").exists()
     results_lines = session_manager._session_results_path(session_id).read_text(encoding="utf-8").strip().splitlines()
     assert len(results_lines) == 2
+
+
+def test_candidate_run_writes_analysis_input_metric_bundle(session_env, monkeypatch) -> None:
+    session_id = "session-analysis-input-001"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {"metric_value": 0.65, "weighted_cv_rmse_mean": 0.31, "weighted_cv_pearson_r_mean": 0.20, "weighted_cv_spearman_r_mean": 0.25},
+                {"metric_value": 0.67, "weighted_cv_rmse_mean": 0.30, "weighted_cv_pearson_r_mean": 0.23, "weighted_cv_spearman_r_mean": 0.27},
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Try a broader-based improvement.",
+        mutation_summary="Candidate analysis-input mutation.",
+        description="Candidate analysis-input run",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    run_dir = Path(state.run_dirs[state.ordered_run_ids[-1]])
+    analysis_input = json.loads(run_dir.joinpath("analysis_input.json").read_text(encoding="utf-8"))
+
+    assert analysis_input["analysis_mode"] == "metric_comparison"
+    assert analysis_input["decision_status"] == "keep"
+    assert analysis_input["metrics"]["weighted_cv_auc"]["delta_vs_compared"] == pytest.approx(0.02)
+    assert analysis_input["metrics"]["weighted_cv_rmse_mean"]["compared_label"] == "better"
+    assert analysis_input["rule_based_interpretation"]
+    assert analysis_input["analysis_constraints"]["do_not_override_decision_rule"] is True
+
+
+def test_analyze_run_writes_agent_analysis_and_refreshes_synopsis(
+    session_env,
+    monkeypatch,
+) -> None:
+    session_id = "session-agent-analysis-001"
+    _start_session(session_id)
+    monkeypatch.setattr(session_manager, "run_experiment", _fake_run_experiment_factory([0.65]))
+
+    assert _run_base(session_id) == 0
+    state = session_manager.load_session_state(session_id)
+    run_id = state.ordered_run_ids[0]
+    run_dir = Path(state.run_dirs[run_id])
+
+    assert session_manager.main(
+        [
+            "analyze-run",
+            "--session-id",
+            session_id,
+            "--run-id",
+            run_id,
+            "--summary-label",
+            "baseline reference",
+            "--freeform-analysis",
+            "This baseline establishes the first trustworthy reference point and shows stable secondary metrics, so future mutations should stay local and easy to attribute.",
+            "--likely-helped",
+            "balanced starting width",
+            "--likely-hurt",
+            "limited depth capacity",
+            "--confidence",
+            "0.72",
+            "--next-step-reasoning",
+            "Test one nearby width or dropout change so the next run stays attributable to a single architectural axis.",
+        ]
+    ) == 0
+
+    agent_analysis = json.loads(run_dir.joinpath("agent_analysis.json").read_text(encoding="utf-8"))
+    synopsis = run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+
+    assert agent_analysis["summary_label"] == "baseline reference"
+    assert agent_analysis["analysis_mode"] == "metric_comparison"
+    assert "### Agent Analysis" in synopsis
+    assert "Summary label: `baseline reference`" in synopsis
+    assert "future mutations should stay local and easy to attribute." in synopsis
+
+
+def test_record_agent_analysis_validates_word_limits(session_env, monkeypatch) -> None:
+    session_id = "session-agent-analysis-002"
+    _start_session(session_id)
+    monkeypatch.setattr(session_manager, "run_experiment", _fake_run_experiment_factory([0.65]))
+
+    assert _run_base(session_id) == 0
+    state = session_manager.load_session_state(session_id)
+    run_id = state.ordered_run_ids[0]
+
+    with pytest.raises(ValueError, match="freeform_analysis"):
+        session_manager.record_agent_analysis(
+            session_id=session_id,
+            run_id=run_id,
+            summary_label="too short",
+            freeform_analysis="Too short.",
+            likely_helped=["balanced starting width"],
+            likely_hurt=[],
+            confidence=0.5,
+            next_step_reasoning="Try one nearby width change next.",
+        )
 
 
 def test_mixed_signal_synopsis_marks_partial_support_and_base_context(
@@ -453,7 +555,10 @@ def test_crashed_run_records_failure(session_env, monkeypatch) -> None:
     assert state.crash_count == 1
     assert state.run_statuses[crashed_run_id] == "crash"
     assert crashed_run_dir.joinpath("failure.json").exists()
+    analysis_input = json.loads(crashed_run_dir.joinpath("analysis_input.json").read_text(encoding="utf-8"))
     crash_synopsis = crashed_run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+    assert analysis_input["analysis_mode"] == "failure_review"
+    assert analysis_input["failure"]["error_type"] == "RuntimeError"
     assert "This run crashed before a summary was written." in crash_synopsis
     assert "Metric tradeoff:" not in crash_synopsis
     assert "Hypothesis assessment:" not in crash_synopsis

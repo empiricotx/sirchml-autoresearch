@@ -139,6 +139,47 @@ class DecisionRecord:
 
 
 @dataclass(frozen=True)
+class AnalysisInputRecord:
+    schema_version: int
+    analysis_mode: str
+    session_id: str
+    run_id: str
+    session_run_index: int
+    run_role: str
+    decision_status: str
+    compared_against_run_id: str | None
+    base_run_id: str | None
+    best_known_run_id_at_start: str | None
+    hypothesis: str
+    mutation_summary: str
+    description: str
+    architecture: dict[str, Any] | None
+    decision: dict[str, Any]
+    metrics: dict[str, dict[str, Any]]
+    diagnostics: dict[str, Any]
+    rule_based_interpretation: list[str]
+    failure: dict[str, Any] | None
+    analysis_constraints: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AgentAnalysisRecord:
+    schema_version: int
+    session_id: str
+    run_id: str
+    analysis_mode: str
+    created_at: str
+    analysis_input_sha256: str
+    decision_status: str
+    summary_label: str
+    freeform_analysis: str
+    likely_helped: list[str]
+    likely_hurt: list[str]
+    confidence: float
+    next_step_reasoning: str
+
+
+@dataclass(frozen=True)
 class SessionSummaryRecord:
     session_id: str
     status: str
@@ -193,6 +234,13 @@ class MetricDeltaView:
 INTERPRETATION_NEAR_MISS_AUC_DELTA = 0.005
 INTERPRETATION_AUC_SPAN_DELTA = 0.08
 INTERPRETATION_RMSE_SPAN_DELTA = 0.05
+ANALYSIS_SCHEMA_VERSION = 1
+AGENT_ANALYSIS_MAX_WORDS = 180
+AGENT_ANALYSIS_MIN_WORDS = 15
+AGENT_ANALYSIS_FAILURE_MIN_WORDS = 5
+AGENT_ANALYSIS_MAX_FACTORS = 3
+AGENT_ANALYSIS_MAX_FACTOR_WORDS = 16
+AGENT_ANALYSIS_MAX_NEXT_STEP_WORDS = 80
 
 INTERPRETATION_METRIC_SPECS: dict[str, InterpretationMetricSpec] = {
     "weighted_cv_auc": InterpretationMetricSpec(
@@ -237,6 +285,24 @@ INTERPRETATION_METRIC_SPECS: dict[str, InterpretationMetricSpec] = {
         direction="lower",
         flat_threshold=1.0,
     ),
+    "weighted_cv_mae_mean": InterpretationMetricSpec(
+        summary_attr="weighted_cv_mae_mean",
+        display_name="Weighted CV MAE",
+        direction="lower",
+        flat_threshold=0.002,
+    ),
+    "weighted_cv_r2_mean": InterpretationMetricSpec(
+        summary_attr="weighted_cv_r2_mean",
+        display_name="Weighted CV R2",
+        direction="higher",
+        flat_threshold=0.01,
+    ),
+    "pooled_cv_rmse": InterpretationMetricSpec(
+        summary_attr="pooled_cv_rmse",
+        display_name="Pooled CV RMSE",
+        direction="lower",
+        flat_threshold=0.002,
+    ),
 }
 
 INTERPRETATION_METRIC_ORDER = (
@@ -247,6 +313,13 @@ INTERPRETATION_METRIC_ORDER = (
     "cv_rmse_std",
     "num_params",
     "train_seconds",
+)
+
+ANALYSIS_INPUT_METRIC_ORDER = (
+    *INTERPRETATION_METRIC_ORDER,
+    "weighted_cv_mae_mean",
+    "weighted_cv_r2_mean",
+    "pooled_cv_rmse",
 )
 
 
@@ -354,6 +427,14 @@ def _session_summary_json_path(session_id: str) -> Path:
 
 def _session_summary_md_path(session_id: str) -> Path:
     return _session_dir(session_id) / "session_summary.md"
+
+
+def _analysis_input_path(run_dir: Path) -> Path:
+    return run_dir / "analysis_input.json"
+
+
+def _agent_analysis_path(run_dir: Path) -> Path:
+    return run_dir / "agent_analysis.json"
 
 
 def _generate_session_id() -> str:
@@ -598,9 +679,11 @@ def _build_metric_delta_bundle(
     current_summary: ExperimentSummary,
     compared_summary: ExperimentSummary | None,
     base_summary: ExperimentSummary | None,
+    *,
+    metric_names: Sequence[str] = INTERPRETATION_METRIC_ORDER,
 ) -> dict[str, MetricDeltaView]:
     metric_bundle: dict[str, MetricDeltaView] = {}
-    for metric_name in INTERPRETATION_METRIC_ORDER:
+    for metric_name in metric_names:
         current_value = _summary_metric_value(current_summary, metric_name)
         compared_value = _summary_metric_value(compared_summary, metric_name)
         base_value = _summary_metric_value(base_summary, metric_name)
@@ -635,6 +718,79 @@ def _format_metric_movement_line(metric_movement: MetricDeltaView) -> str:
         f"`{_format_metric_delta_value(metric_movement.metric_name, metric_movement.delta_vs_base)}`"
         f" (`{metric_movement.base_label}`)"
     )
+
+
+def _metric_view_payload(
+    metric_bundle: dict[str, MetricDeltaView],
+    *,
+    compared_summary: ExperimentSummary | None,
+    base_summary: ExperimentSummary | None,
+) -> dict[str, dict[str, Any]]:
+    payload: dict[str, dict[str, Any]] = {}
+    for metric_name, metric_view in metric_bundle.items():
+        metric_spec = INTERPRETATION_METRIC_SPECS[metric_name]
+        payload[metric_name] = {
+            "display_name": metric_spec.display_name,
+            "direction": metric_spec.direction,
+            "current_value": metric_view.current_value,
+            "compared_value": _summary_metric_value(compared_summary, metric_name),
+            "base_value": _summary_metric_value(base_summary, metric_name),
+            "delta_vs_compared": metric_view.delta_vs_compared,
+            "delta_vs_base": metric_view.delta_vs_base,
+            "compared_label": metric_view.compared_label,
+            "base_label": metric_view.base_label,
+        }
+    return payload
+
+
+def _analysis_diagnostics_payload(
+    diagnostics: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if diagnostics is None:
+        return {}
+    return {
+        "fold_count": diagnostics.get("fold_count"),
+        "nan_metric_counts": diagnostics.get("nan_metric_counts"),
+        "best_auc_fold": diagnostics.get("best_auc_fold"),
+        "worst_auc_fold": diagnostics.get("worst_auc_fold"),
+        "best_rmse_fold": diagnostics.get("best_rmse_fold"),
+        "worst_rmse_fold": diagnostics.get("worst_rmse_fold"),
+    }
+
+
+def _analysis_constraints_payload(*, analysis_mode: str) -> dict[str, Any]:
+    return {
+        "analysis_mode": analysis_mode,
+        "do_not_override_decision_rule": True,
+        "require_concrete_metric_references": analysis_mode == "metric_comparison",
+        "freeform_analysis_min_words": (
+            AGENT_ANALYSIS_MIN_WORDS
+            if analysis_mode == "metric_comparison"
+            else AGENT_ANALYSIS_FAILURE_MIN_WORDS
+        ),
+        "freeform_analysis_max_words": AGENT_ANALYSIS_MAX_WORDS,
+        "max_likely_helped_items": AGENT_ANALYSIS_MAX_FACTORS,
+        "max_likely_hurt_items": AGENT_ANALYSIS_MAX_FACTORS,
+        "max_factor_words": AGENT_ANALYSIS_MAX_FACTOR_WORDS,
+        "next_step_reasoning_max_words": AGENT_ANALYSIS_MAX_NEXT_STEP_WORDS,
+        "max_follow_up_ideas": 2,
+    }
+
+
+def _word_count(text: str) -> int:
+    return len([word for word in text.strip().split() if word])
+
+
+def _normalize_analysis_list(items: Sequence[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = " ".join(item.strip().split())
+        if not cleaned or cleaned in seen:
+            continue
+        normalized.append(cleaned)
+        seen.add(cleaned)
+    return normalized
 
 
 def _diagnostic_metric_count(
@@ -1010,6 +1166,107 @@ def _build_interpretation_bullets(
     return lines
 
 
+def _build_analysis_input_record(
+    *,
+    state: SessionState,
+    run_context: RunContext,
+    decision: DecisionRecord,
+    summary: ExperimentSummary,
+    summary_payload: dict[str, Any],
+    compared_summary_payload: dict[str, Any] | None,
+    session_base_summary_payload: dict[str, Any] | None,
+) -> AnalysisInputRecord:
+    compared_summary = (
+        None if compared_summary_payload is None else _summary_from_payload(compared_summary_payload)
+    )
+    base_summary = (
+        None
+        if session_base_summary_payload is None
+        else _summary_from_payload(session_base_summary_payload)
+    )
+    diagnostics = summary_payload.get("diagnostics", {})
+    compared_diagnostics = (
+        None if compared_summary_payload is None else compared_summary_payload.get("diagnostics", {})
+    )
+    interpretation_metric_bundle = _build_metric_delta_bundle(
+        summary,
+        compared_summary,
+        base_summary,
+    )
+    analysis_metric_bundle = _build_metric_delta_bundle(
+        summary,
+        compared_summary,
+        base_summary,
+        metric_names=ANALYSIS_INPUT_METRIC_ORDER,
+    )
+    return AnalysisInputRecord(
+        schema_version=ANALYSIS_SCHEMA_VERSION,
+        analysis_mode="metric_comparison",
+        session_id=run_context.session_id,
+        run_id=run_context.run_id,
+        session_run_index=run_context.session_run_index,
+        run_role=run_context.run_role,
+        decision_status=decision.decision_status,
+        compared_against_run_id=run_context.compared_against_run_id,
+        base_run_id=state.base_run_id,
+        best_known_run_id_at_start=run_context.best_known_run_id_at_start,
+        hypothesis=run_context.hypothesis,
+        mutation_summary=run_context.mutation_summary,
+        description=run_context.description,
+        architecture=summary_payload.get("architecture"),
+        decision=asdict(decision),
+        metrics=_metric_view_payload(
+            analysis_metric_bundle,
+            compared_summary=compared_summary,
+            base_summary=base_summary,
+        ),
+        diagnostics=_analysis_diagnostics_payload(diagnostics),
+        rule_based_interpretation=_build_interpretation_bullets(
+            decision=decision,
+            metric_bundle=interpretation_metric_bundle,
+            current_diagnostics=diagnostics,
+            compared_diagnostics=compared_diagnostics,
+        ),
+        failure=None,
+        analysis_constraints=_analysis_constraints_payload(analysis_mode="metric_comparison"),
+    )
+
+
+def _build_failure_analysis_input_record(
+    *,
+    state: SessionState,
+    run_context: RunContext,
+    decision: DecisionRecord,
+    failure_payload: dict[str, Any],
+) -> AnalysisInputRecord:
+    return AnalysisInputRecord(
+        schema_version=ANALYSIS_SCHEMA_VERSION,
+        analysis_mode="failure_review",
+        session_id=run_context.session_id,
+        run_id=run_context.run_id,
+        session_run_index=run_context.session_run_index,
+        run_role=run_context.run_role,
+        decision_status=decision.decision_status,
+        compared_against_run_id=run_context.compared_against_run_id,
+        base_run_id=state.base_run_id,
+        best_known_run_id_at_start=run_context.best_known_run_id_at_start,
+        hypothesis=run_context.hypothesis,
+        mutation_summary=run_context.mutation_summary,
+        description=run_context.description,
+        architecture=run_context.architecture_spec,
+        decision=asdict(decision),
+        metrics={},
+        diagnostics={},
+        rule_based_interpretation=[],
+        failure={
+            "error_type": failure_payload.get("error_type"),
+            "error_message": failure_payload.get("error_message"),
+            "timestamp": failure_payload.get("timestamp"),
+        },
+        analysis_constraints=_analysis_constraints_payload(analysis_mode="failure_review"),
+    )
+
+
 def _suggest_next_mutations(
     architecture_payload: dict[str, Any] | None,
     *,
@@ -1035,6 +1292,33 @@ def _suggest_next_mutations(
     ]
 
 
+def _load_agent_analysis_payload(run_dir: Path) -> dict[str, Any] | None:
+    agent_analysis_path = _agent_analysis_path(run_dir)
+    if not agent_analysis_path.exists():
+        return None
+    return _read_json(agent_analysis_path)
+
+
+def _format_agent_analysis_lines(agent_analysis_payload: dict[str, Any] | None) -> list[str]:
+    if agent_analysis_payload is None:
+        return [
+            "- No agent analysis recorded yet. Run `session_manager.py analyze-run` before syncing the incumbent."
+        ]
+
+    likely_helped = agent_analysis_payload.get("likely_helped") or []
+    likely_hurt = agent_analysis_payload.get("likely_hurt") or []
+    helped_text = "; ".join(str(item) for item in likely_helped) if likely_helped else "n/a"
+    hurt_text = "; ".join(str(item) for item in likely_hurt) if likely_hurt else "n/a"
+    return [
+        f"- Summary label: `{agent_analysis_payload.get('summary_label', 'n/a')}`",
+        f"- Confidence: `{float(agent_analysis_payload.get('confidence', 0.0)):.2f}`",
+        f"- Analysis: {agent_analysis_payload.get('freeform_analysis', '')}",
+        f"- Likely helped: {helped_text}",
+        f"- Likely hurt: {hurt_text}",
+        f"- Next-step reasoning: {agent_analysis_payload.get('next_step_reasoning', '')}",
+    ]
+
+
 def write_run_synopsis(
     *,
     run_dir: Path,
@@ -1050,6 +1334,7 @@ def write_run_synopsis(
     compared_diagnostics = (
         None if compared_summary_payload is None else compared_summary_payload.get("diagnostics", {})
     )
+    agent_analysis_payload = _load_agent_analysis_payload(run_dir)
     compared_summary = (
         None if compared_summary_payload is None else _summary_from_payload(compared_summary_payload)
     )
@@ -1095,6 +1380,15 @@ def write_run_synopsis(
             [
                 "- This run crashed before a summary was written.",
                 "",
+                "## Interpretation",
+                "",
+                "### Agent Analysis",
+            ]
+        )
+        lines.extend(_format_agent_analysis_lines(agent_analysis_payload))
+        lines.extend(
+            [
+                "",
                 "## Next-Run Guidance",
                 "- Restore the incumbent with `session_manager.py sync-incumbent` before the next mutation.",
             ]
@@ -1118,6 +1412,8 @@ def write_run_synopsis(
                 f"- Undefined metric counts: `{diagnostics.get('nan_metric_counts')}`",
                 "",
                 "## Interpretation",
+                "",
+                "### Rule-Based Interpretation",
             ]
         )
         lines.extend(
@@ -1128,6 +1424,8 @@ def write_run_synopsis(
                 compared_diagnostics=compared_diagnostics,
             )
         )
+        lines.extend(["", "### Agent Analysis"])
+        lines.extend(_format_agent_analysis_lines(agent_analysis_payload))
         lines.extend(["", "## Next-Run Guidance"])
         for suggestion in _suggest_next_mutations(
             architecture_payload,
@@ -1145,6 +1443,141 @@ def _run_record_from_state(state: SessionState, run_id: str) -> tuple[RunContext
     decision_path = run_dir / "decision.json"
     decision = DecisionRecord(**_read_json(decision_path)) if decision_path.exists() else None
     return run_context, summary_payload, decision
+
+
+def _write_analysis_input(run_dir: Path, record: AnalysisInputRecord) -> None:
+    _write_json(_analysis_input_path(run_dir), asdict(record))
+
+
+def _regenerate_run_synopsis(session_id: str, run_id: str) -> None:
+    state = load_session_state(session_id)
+    run_context, summary_payload, decision = _run_record_from_state(state, run_id)
+    if decision is None:
+        raise FileNotFoundError(f"Decision artifact not found for run {run_id}.")
+    run_dir = Path(run_context.run_dir)
+    write_run_synopsis(
+        run_dir=run_dir,
+        run_context=run_context,
+        decision=decision,
+        summary=None if summary_payload is None else _summary_from_payload(summary_payload),
+        summary_payload=summary_payload,
+        compared_summary_payload=_compared_summary_payload(state, run_context),
+        session_base_summary_payload=_session_base_summary_payload(state),
+    )
+
+
+def _validate_agent_analysis_fields(
+    *,
+    analysis_input: AnalysisInputRecord,
+    summary_label: str,
+    freeform_analysis: str,
+    likely_helped: Sequence[str],
+    likely_hurt: Sequence[str],
+    confidence: float,
+    next_step_reasoning: str,
+) -> tuple[str, str, list[str], list[str], str]:
+    cleaned_summary_label = " ".join(summary_label.strip().split())
+    if not cleaned_summary_label:
+        raise ValueError("summary_label must not be empty.")
+    if len(cleaned_summary_label) > 80:
+        raise ValueError("summary_label must be 80 characters or fewer.")
+
+    cleaned_freeform_analysis = " ".join(freeform_analysis.strip().split())
+    min_words = (
+        AGENT_ANALYSIS_MIN_WORDS
+        if analysis_input.analysis_mode == "metric_comparison"
+        else AGENT_ANALYSIS_FAILURE_MIN_WORDS
+    )
+    freeform_word_count = _word_count(cleaned_freeform_analysis)
+    if freeform_word_count < min_words or freeform_word_count > AGENT_ANALYSIS_MAX_WORDS:
+        raise ValueError(
+            "freeform_analysis must stay within the configured word bounds for the analysis mode."
+        )
+
+    cleaned_likely_helped = _normalize_analysis_list(likely_helped)
+    cleaned_likely_hurt = _normalize_analysis_list(likely_hurt)
+    if len(cleaned_likely_helped) > AGENT_ANALYSIS_MAX_FACTORS:
+        raise ValueError("Too many likely_helped items were provided.")
+    if len(cleaned_likely_hurt) > AGENT_ANALYSIS_MAX_FACTORS:
+        raise ValueError("Too many likely_hurt items were provided.")
+    for item in [*cleaned_likely_helped, *cleaned_likely_hurt]:
+        if _word_count(item) > AGENT_ANALYSIS_MAX_FACTOR_WORDS:
+            raise ValueError("Each likely_helped/likely_hurt item must stay concise.")
+
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("confidence must be between 0.0 and 1.0.")
+
+    cleaned_next_step_reasoning = " ".join(next_step_reasoning.strip().split())
+    if not cleaned_next_step_reasoning:
+        raise ValueError("next_step_reasoning must not be empty.")
+    if _word_count(cleaned_next_step_reasoning) > AGENT_ANALYSIS_MAX_NEXT_STEP_WORDS:
+        raise ValueError("next_step_reasoning must stay concise.")
+
+    return (
+        cleaned_summary_label,
+        cleaned_freeform_analysis,
+        cleaned_likely_helped,
+        cleaned_likely_hurt,
+        cleaned_next_step_reasoning,
+    )
+
+
+def record_agent_analysis(
+    *,
+    session_id: str,
+    run_id: str,
+    summary_label: str,
+    freeform_analysis: str,
+    likely_helped: Sequence[str],
+    likely_hurt: Sequence[str],
+    confidence: float,
+    next_step_reasoning: str,
+) -> AgentAnalysisRecord:
+    state = load_session_state(session_id)
+    run_dir_value = state.run_dirs.get(run_id)
+    if run_dir_value is None:
+        raise ValueError(f"Run {run_id!r} was not found in session {session_id!r}.")
+
+    run_dir = Path(run_dir_value)
+    analysis_input_path = _analysis_input_path(run_dir)
+    if not analysis_input_path.exists():
+        raise FileNotFoundError(f"Analysis input not found at {analysis_input_path}.")
+
+    analysis_input = AnalysisInputRecord(**_read_json(analysis_input_path))
+    (
+        cleaned_summary_label,
+        cleaned_freeform_analysis,
+        cleaned_likely_helped,
+        cleaned_likely_hurt,
+        cleaned_next_step_reasoning,
+    ) = _validate_agent_analysis_fields(
+        analysis_input=analysis_input,
+        summary_label=summary_label,
+        freeform_analysis=freeform_analysis,
+        likely_helped=likely_helped,
+        likely_hurt=likely_hurt,
+        confidence=confidence,
+        next_step_reasoning=next_step_reasoning,
+    )
+
+    agent_analysis = AgentAnalysisRecord(
+        schema_version=ANALYSIS_SCHEMA_VERSION,
+        session_id=session_id,
+        run_id=run_id,
+        analysis_mode=analysis_input.analysis_mode,
+        created_at=_utc_now_iso(),
+        analysis_input_sha256=_sha256_path(analysis_input_path),
+        decision_status=analysis_input.decision_status,
+        summary_label=cleaned_summary_label,
+        freeform_analysis=cleaned_freeform_analysis,
+        likely_helped=cleaned_likely_helped,
+        likely_hurt=cleaned_likely_hurt,
+        confidence=confidence,
+        next_step_reasoning=cleaned_next_step_reasoning,
+    )
+    _write_json(_agent_analysis_path(run_dir), asdict(agent_analysis))
+    _regenerate_run_synopsis(session_id, run_id)
+    return agent_analysis
 
 
 def _architecture_key(payload: dict[str, Any]) -> str:
@@ -1560,10 +1993,23 @@ def _record_successful_run(
         state.discard_count += 1
 
     save_session_state(state)
-    write_decision_record(Path(run_context.run_dir), decision)
+    run_dir = Path(run_context.run_dir)
+    write_decision_record(run_dir, decision)
+    _write_analysis_input(
+        run_dir,
+        _build_analysis_input_record(
+            state=state,
+            run_context=run_context,
+            decision=decision,
+            summary=summary,
+            summary_payload=summary_payload,
+            compared_summary_payload=compared_summary_payload,
+            session_base_summary_payload=session_base_summary_payload,
+        ),
+    )
     append_session_results_row(context.session_id, run_context, decision, summary)
     write_run_synopsis(
-        run_dir=Path(run_context.run_dir),
+        run_dir=run_dir,
         run_context=run_context,
         decision=decision,
         summary=summary,
@@ -1579,6 +2025,7 @@ def _record_crashed_run(
     state: SessionState,
     run_context: RunContext,
     decision: DecisionRecord,
+    failure_payload: dict[str, Any],
     failure_path: Path,
 ) -> None:
     state.ordered_run_ids.append(run_context.run_id)
@@ -1591,10 +2038,20 @@ def _record_crashed_run(
     if run_context.run_role == "rerun":
         state.rerun_count += 1
     save_session_state(state)
-    write_decision_record(Path(run_context.run_dir), decision)
+    run_dir = Path(run_context.run_dir)
+    write_decision_record(run_dir, decision)
+    _write_analysis_input(
+        run_dir,
+        _build_failure_analysis_input_record(
+            state=state,
+            run_context=run_context,
+            decision=decision,
+            failure_payload=failure_payload,
+        ),
+    )
     append_session_results_row(context.session_id, run_context, decision, summary=None)
     write_run_synopsis(
-        run_dir=Path(run_context.run_dir),
+        run_dir=run_dir,
         run_context=run_context,
         decision=decision,
         summary=None,
@@ -1651,6 +2108,7 @@ def run_session_experiment(intent: RunIntent) -> DecisionRecord:
             state=state,
             run_context=run_context,
             decision=decision,
+            failure_payload=failure_payload,
             failure_path=failure_path,
         )
         return decision
@@ -1726,6 +2184,19 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--mutation-summary", default="")
     run_parser.add_argument("--description", default="")
 
+    analyze_parser = subparsers.add_parser(
+        "analyze-run",
+        help="Record agent-authored analysis for a run and refresh synopsis.md.",
+    )
+    analyze_parser.add_argument("--session-id", required=True)
+    analyze_parser.add_argument("--run-id", required=True)
+    analyze_parser.add_argument("--summary-label", required=True)
+    analyze_parser.add_argument("--freeform-analysis", required=True)
+    analyze_parser.add_argument("--likely-helped", action="append", default=[])
+    analyze_parser.add_argument("--likely-hurt", action="append", default=[])
+    analyze_parser.add_argument("--confidence", type=float, required=True)
+    analyze_parser.add_argument("--next-step-reasoning", required=True)
+
     sync_parser = subparsers.add_parser("sync-incumbent", help="Restore train.py from the incumbent run.")
     sync_parser.add_argument("--session-id", required=True)
 
@@ -1763,6 +2234,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(json.dumps(asdict(decision), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "analyze-run":
+        agent_analysis = record_agent_analysis(
+            session_id=args.session_id,
+            run_id=args.run_id,
+            summary_label=args.summary_label,
+            freeform_analysis=args.freeform_analysis,
+            likely_helped=args.likely_helped,
+            likely_hurt=args.likely_hurt,
+            confidence=args.confidence,
+            next_step_reasoning=args.next_step_reasoning,
+        )
+        print(json.dumps(asdict(agent_analysis), indent=2, sort_keys=True))
         return 0
 
     if args.command == "sync-incumbent":
