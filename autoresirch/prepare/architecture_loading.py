@@ -6,6 +6,9 @@ from types import ModuleType
 from .schemas import ArchitectureSpec, ArchitectureConstraints, ARCHITECTURE_CONSTRAINTS, EDITABLE_TRAIN_FILE, LoadedArchitecture, ALLOWED_TRAIN_IMPORTS, FORBIDDEN_CALL_NAMES, FORBIDDEN_ATTRIBUTE_NAMES
 
 
+TRAIN_FILE_LABEL = "autoresirch/train.py"
+
+
 def validate_architecture_spec(
     spec: ArchitectureSpec,
     constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
@@ -38,11 +41,11 @@ def validate_train_source(path: Path) -> None:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name not in ALLOWED_TRAIN_IMPORTS:
-                    raise ValueError(f"Import not allowed in train.py: {alias.name!r}")
+                    raise ValueError(f"Import not allowed in {TRAIN_FILE_LABEL}: {alias.name!r}")
         elif isinstance(node, ast.ImportFrom):
             module_name = node.module or ""
             if module_name not in ALLOWED_TRAIN_IMPORTS:
-                raise ValueError(f"Import not allowed in train.py: {module_name!r}")
+                raise ValueError(f"Import not allowed in {TRAIN_FILE_LABEL}: {module_name!r}")
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "ARCHITECTURE":
@@ -51,14 +54,14 @@ def validate_train_source(path: Path) -> None:
             has_build_model = True
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_CALL_NAMES:
-                raise ValueError(f"Forbidden call in train.py: {node.func.id}()")
+                raise ValueError(f"Forbidden call in {TRAIN_FILE_LABEL}: {node.func.id}()")
             if isinstance(node.func, ast.Attribute) and node.func.attr in FORBIDDEN_ATTRIBUTE_NAMES:
-                raise ValueError(f"Forbidden method call in train.py: .{node.func.attr}()")
+                raise ValueError(f"Forbidden method call in {TRAIN_FILE_LABEL}: .{node.func.attr}()")
 
     if not has_architecture:
-        raise ValueError("train.py must define ARCHITECTURE.")
+        raise ValueError(f"{TRAIN_FILE_LABEL} must define ARCHITECTURE.")
     if not has_build_model:
-        raise ValueError("train.py must define build_model(context).")
+        raise ValueError(f"{TRAIN_FILE_LABEL} must define build_model(context).")
 
 
 def load_train_definition(path: Path = EDITABLE_TRAIN_FILE) -> LoadedArchitecture:
@@ -77,9 +80,11 @@ def _extract_loaded_architecture(module: ModuleType) -> LoadedArchitecture:
     build_model = getattr(module, "build_model", None)
 
     if not isinstance(architecture, ArchitectureSpec):
-        raise TypeError("train.py must define ARCHITECTURE as an ArchitectureSpec instance.")
+        raise TypeError(
+            f"{TRAIN_FILE_LABEL} must define ARCHITECTURE as an ArchitectureSpec instance."
+        )
     if not callable(build_model):
-        raise TypeError("train.py must define a callable build_model(context).")
+        raise TypeError(f"{TRAIN_FILE_LABEL} must define a callable build_model(context).")
 
     validate_architecture_spec(architecture)
     return LoadedArchitecture(

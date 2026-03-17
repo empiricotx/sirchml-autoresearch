@@ -5,7 +5,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from prepare import METRIC_CONFIG, run_experiment
+from autoresirch.prepare import METRIC_CONFIG, run_experiment
 from autoresirch.session_manager.analysis import (
     _build_analysis_input_record,
     _build_failure_analysis_input_record,

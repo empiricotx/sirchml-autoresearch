@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from prepare import (
+from autoresirch.prepare import (
     ARCHITECTURE_CONSTRAINTS,
     DATASET_CONFIG,
     METRIC_CONFIG,

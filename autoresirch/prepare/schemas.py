@@ -14,7 +14,7 @@ CACHE_DIR = REPO_ROOT / ".cache" / "sirna_regression"
 RUNS_DIR = REPO_ROOT / "runs"
 DATA_DIR = REPO_ROOT / "data"
 RESULTS_TSV = REPO_ROOT / "results.tsv"
-EDITABLE_TRAIN_FILE = REPO_ROOT / "train.py"
+EDITABLE_TRAIN_FILE = REPO_ROOT / "autoresirch" / "train.py"
 
 @dataclass(frozen=True)
 class DatasetConfig:
@@ -91,6 +91,7 @@ ALLOWED_TRAIN_IMPORTS = {
     "__future__",
     "math",
     "prepare",
+    "autoresirch.prepare",
     "torch",
     "torch.nn",
     "torch.nn.functional",

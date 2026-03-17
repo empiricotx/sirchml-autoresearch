@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from prepare import ExperimentSummary
+from autoresirch.prepare import ExperimentSummary
 from autoresirch.session_manager.constants import (
     AGENT_ANALYSIS_FAILURE_MIN_WORDS,
     AGENT_ANALYSIS_MAX_FACTORS,

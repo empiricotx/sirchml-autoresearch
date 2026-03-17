@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict
 from typing import Sequence
 
-from prepare import METRIC_CONFIG
+from autoresirch.prepare import METRIC_CONFIG
 from autoresirch.session_manager.analysis import record_agent_analysis
 from autoresirch.session_manager.orchestration import (
     create_session,
@@ -52,7 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--confidence", type=float, required=True)
     analyze_parser.add_argument("--next-step-reasoning", required=True)
 
-    sync_parser = subparsers.add_parser("sync-incumbent", help="Restore train.py from the incumbent run.")
+    sync_parser = subparsers.add_parser(
+        "sync-incumbent",
+        help="Restore autoresirch/train.py from the incumbent run.",
+    )
     sync_parser.add_argument("--session-id", required=True)
 
     status_parser = subparsers.add_parser("status", help="Show current session status.")
