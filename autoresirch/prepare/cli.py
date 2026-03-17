@@ -1,8 +1,8 @@
 from __future__ import annotations
+
 import argparse
 
-from .dataset_preparation import prepare_dataset
-from .utils import print_dataset_summary
+from .dataset_preparation import prepare_dataset, print_dataset_summary
 
 
 def parse_args() -> argparse.Namespace:

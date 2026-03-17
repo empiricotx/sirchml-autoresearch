@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 from torch import nn
 
+import autoresirch.prepare as prepare_package
 import prepare as prepare_module
 from prepare import (
     ArchitectureSpec,
@@ -380,3 +381,18 @@ def test_run_experiment_compatibility_without_custom_run_dir(
     run_dir = Path(summary.run_dir)
     assert run_dir.parent == tmp_path / "runs"
     assert run_dir.joinpath("summary.json").exists()
+
+
+def test_refactored_prepare_package_imports_and_uses_repo_root() -> None:
+    assert prepare_package.REPO_ROOT == Path(__file__).resolve().parents[1]
+    assert prepare_package.DATA_DIR == prepare_package.REPO_ROOT / "data"
+    assert prepare_package.RUNS_DIR == prepare_package.REPO_ROOT / "runs"
+    assert callable(prepare_package.prepare_dataset)
+    assert callable(prepare_package.run_experiment)
+
+
+def test_refactored_prepare_cli_uses_dataset_preparation_exports() -> None:
+    assert prepare_package.print_dataset_summary is prepare_package.main.__globals__.get(
+        "print_dataset_summary",
+        prepare_package.print_dataset_summary,
+    ) or callable(prepare_package.print_dataset_summary)

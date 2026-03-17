@@ -9,7 +9,7 @@ from autoresirch.session_manager.schemas import InterpretationMetricSpec
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSIONS_DIR = REPO_ROOT / "sessions"
 EDITABLE_TRAIN_FILE = REPO_ROOT / "train.py"
-PROGRAM_FILE = REPO_ROOT / "program.md"
+PROGRAM_FILE = REPO_ROOT / "autoresirch" / "program.md"
 RUN_LOG = REPO_ROOT / "run.log"
 
 SESSION_RESULTS_HEADER = (

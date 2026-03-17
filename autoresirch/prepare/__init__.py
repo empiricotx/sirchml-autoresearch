@@ -1,11 +1,101 @@
-from .schemas import *
-from .utils import *
-from .dataset_preparation import *
-from .fold_preprocessor import *
-from .architecture_loading import *
-from .training_harness import *
-from .orchestration import *
-from .cli import *
+from .architecture_loading import (
+    _extract_loaded_architecture,
+    load_train_definition,
+    validate_architecture_spec,
+    validate_train_source,
+)
+from .dataset_preparation import (
+    build_prepared_dataset_from_frame,
+    build_sequence_feature_frame,
+    choose_cv_genes,
+    choose_test_genes,
+    infer_feature_columns,
+    normalize_gene_label,
+    normalize_sequence,
+    prepare_dataset,
+    print_dataset_summary,
+    read_raw_dataframe,
+)
+from .fold_preprocessor import FoldPreprocessor, TargetScaler, build_cv_folds
+from .orchestration import print_experiment_summary, run_experiment, save_run_summary
+from .schemas import (
+    ALLOWED_TRAIN_IMPORTS,
+    ARCHITECTURE_CONSTRAINTS,
+    CACHE_DIR,
+    DATASET_CONFIG,
+    DATA_DIR,
+    EDITABLE_TRAIN_FILE,
+    FORBIDDEN_ATTRIBUTE_NAMES,
+    FORBIDDEN_CALL_NAMES,
+    METRIC_CONFIG,
+    RESULTS_HEADER,
+    RESULTS_TSV,
+    REPO_ROOT,
+    RUNS_DIR,
+    SPLIT_CONFIG,
+    TRAINING_CONFIG,
+    ArchitectureConstraints,
+    ArchitectureContext,
+    ArchitectureSpec,
+    DatasetConfig,
+    ExperimentSummary,
+    FoldDiagnostics,
+    FoldResult,
+    FoldSpec,
+    LoadedArchitecture,
+    MetricConfig,
+    ModelBuilder,
+    PreparedDataset,
+    RegressionMetrics,
+    SplitConfig,
+    TrainingConfig,
+)
+from .training_harness import (
+    _is_defined,
+    _pick_fold_by_metric,
+    _train_epoch,
+    aggregate_fold_results,
+    build_run_diagnostics,
+    create_dataloader,
+    instantiate_model,
+    predict_regression,
+    train_final_holdout,
+    train_fold,
+    validate_budget,
+)
+from .utils import (
+    _config_fingerprint,
+    _json_default,
+    _make_run_dir,
+    _normalize_model_output,
+    _state_dict_to_cpu,
+    binary_effective_labels,
+    build_fold_diagnostics,
+    count_parameters,
+    ensure_results_tsv,
+    ensure_runtime_dirs,
+    evaluate_predictions,
+    mae,
+    pearson_r_score,
+    r2_score,
+    rmse,
+    roc_auc_score_binary,
+    scale_regression_predictions,
+    set_random_seed,
+    spearman_r_score,
+)
+
+
+def parse_args():
+    from .cli import parse_args as cli_parse_args
+
+    return cli_parse_args()
+
+
+def main():
+    from .cli import main as cli_main
+
+    return cli_main()
 
 __all__ = [
     # Schemas
