@@ -53,7 +53,7 @@ The metric is the weighted mean of per-gene validation AUC values, weighted by t
 
 ## Session Protocol
 
-1. Read `README.md`, `autoresirch/program.md`, `autoresirch/train.py`, and `PLANNED_IMPROVEMENTS.md`.
+1. Read `README.md`, `autoresirch/program.md`, and `autoresirch/train.py`.
 2. Confirm the cached dataset exists. If not, tell the human to run `uv run python -m autoresirch.prepare.cli`.
 3. Start a session:
 

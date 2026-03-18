@@ -58,6 +58,7 @@ def _write_fake_summary(
     num_params: int = 123,
     train_seconds: float = 1.5,
     diagnostics: dict[str, Any] | None = None,
+    architecture: dict[str, Any] | None = None,
 ) -> ExperimentSummary:
     summary = ExperimentSummary(
         primary_metric_name="weighted_cv_auc",
@@ -89,16 +90,20 @@ def _write_fake_summary(
         cv_genes=("GENE1", "GENE2"),
         run_dir=str(run_dir),
     )
+    architecture_payload = {
+        "family": "mlp",
+        "hidden_dims": [16],
+        "activation": "silu",
+        "dropout": 0.0,
+        "normalization": "none",
+        "use_bias": True,
+    }
+    if architecture is not None:
+        architecture_payload = architecture
+
     payload = {
         "summary": asdict(summary),
-        "architecture": {
-            "family": "mlp",
-            "hidden_dims": [16],
-            "activation": "silu",
-            "dropout": 0.0,
-            "normalization": "none",
-            "use_bias": True,
-        },
+        "architecture": architecture_payload,
         "diagnostics": {
             "fold_count": 2,
             "nan_metric_counts": {"auc": 0, "pearson_r": 0, "spearman_r": 0},
@@ -588,3 +593,53 @@ def test_finalize_writes_session_summary(session_env, monkeypatch) -> None:
     assert state.status == "completed"
     assert session_manager._session_summary_json_path(session_id).exists()
     assert session_manager._session_summary_md_path(session_id).exists()
+
+
+def test_finalize_handles_hybrid_runs_with_empty_hidden_dims(session_env, monkeypatch) -> None:
+    session_id = "session-007"
+    _start_session(session_id)
+    hybrid_architecture = {
+        "family": "hybrid_cnn_mlp",
+        "hidden_dims": [],
+        "flat_hidden_dims": [32],
+        "fusion_hidden_dims": [16],
+        "activation": "relu",
+        "dropout": 0.1,
+        "normalization": "layernorm",
+        "use_bias": True,
+    }
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {"metric_value": 0.65, "architecture": hybrid_architecture},
+                {"metric_value": 0.66, "architecture": hybrid_architecture},
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(session_id) == 0
+    assert (
+        session_manager.main(
+            [
+                "finalize",
+                "--session-id",
+                session_id,
+                "--status",
+                "completed",
+                "--end-reason",
+                "Hybrid search finished.",
+            ]
+        )
+        == 0
+    )
+
+    summary_payload = json.loads(
+        session_manager._session_summary_json_path(session_id).read_text(encoding="utf-8")
+    )
+    coverage = summary_payload["search_space_coverage"]
+    assert coverage["families_tried"] == ["hybrid_cnn_mlp"]
+    assert coverage["depth_values_tried"] == [0]
+    assert coverage["max_width_values_tried"] == []

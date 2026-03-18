@@ -1186,7 +1186,12 @@ def write_session_summary(
             "dropout_values_tried": sorted({payload.get("dropout") for payload in architectures}),
             "depth_values_tried": sorted({len(payload.get("hidden_dims", [])) for payload in architectures}),
             "max_width_values_tried": sorted(
-                {max(payload.get("hidden_dims", [0])) for payload in architectures}
+                {
+                    max(hidden_dims)
+                    for payload in architectures
+                    for hidden_dims in [payload.get("hidden_dims", [])]
+                    if hidden_dims
+                }
             ),
             "param_count_min": (
                 None if not successful_runs else min(item[1]["summary"]["num_params"] for item in successful_runs)

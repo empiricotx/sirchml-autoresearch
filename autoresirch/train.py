@@ -2,28 +2,27 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from autoresirch.prepare import ArchitectureContext, ArchitectureSpec, run_experiment
 
 
 ARCHITECTURE = ArchitectureSpec(
     family="hybrid_cnn_mlp",
-    hidden_dims=(),
+    hidden_dims=(64,),
     activation="silu",
     dropout=0.1,
     normalization="none",
     use_bias=True,
     use_rnafm_embeddings=True,
     sequence_feature_source="rnafm::antisense_strand_seq",
-    conv_channels=(64, 128),
+    conv_channels=(32, 64),
     kernel_sizes=(5, 3),
     pooling="mean",
-    flat_hidden_dims=(256, 128),
-    fusion_hidden_dims=(128, 64),
-    rnafm_embedding_dim=16,
+    flat_hidden_dims=(192, 96),
+    fusion_hidden_dims=(160, 64),
+    rnafm_pooling_strategy="mean",
 )
-
-USE_INPUT_SKIP = False
 
 
 def make_activation(name: str) -> nn.Module:
@@ -46,7 +45,7 @@ def make_normalization(name: str, width: int) -> nn.Module:
     raise ValueError(f"Unsupported normalization: {name}")
 
 
-class FeedForwardBlock(nn.Module):
+class MLPBlock(nn.Module):
     def __init__(
         self,
         input_dim: int,
@@ -56,198 +55,157 @@ class FeedForwardBlock(nn.Module):
         normalization: str,
         dropout: float,
         use_bias: bool,
-        residual: bool,
     ) -> None:
         super().__init__()
         self.linear = nn.Linear(input_dim, output_dim, bias=use_bias)
         self.normalization = make_normalization(normalization, output_dim)
         self.activation = make_activation(activation)
         self.dropout = nn.Dropout(dropout)
-        self.use_residual = residual
-        if residual and input_dim != output_dim:
-            self.skip = nn.Linear(input_dim, output_dim, bias=False)
-        else:
-            self.skip = nn.Identity()
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         outputs = self.linear(inputs)
         outputs = self.normalization(outputs)
         outputs = self.activation(outputs)
         outputs = self.dropout(outputs)
-        if self.use_residual:
-            outputs = outputs + self.skip(inputs)
         return outputs
 
 
-class RegressionMLP(nn.Module):
+class SequenceConvBlock(nn.Module):
     def __init__(
         self,
-        input_dim: int,
-        output_dim: int,
-        architecture: ArchitectureSpec,
+        input_channels: int,
+        output_channels: int,
         *,
-        hidden_dims: tuple[int, ...] | None = None,
+        kernel_size: int,
+        activation: str,
+        dropout: float,
+        use_bias: bool,
     ) -> None:
+        super().__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv1d(
+            input_channels,
+            output_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            bias=use_bias,
+        )
+        self.normalization = nn.BatchNorm1d(output_channels)
+        self.activation = make_activation(activation)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        outputs = self.conv(inputs)
+        outputs = self.normalization(outputs)
+        outputs = self.activation(outputs)
+        outputs = self.dropout(outputs)
+        return outputs
+
+
+class FlatEncoder(nn.Module):
+    def __init__(self, input_dim: int, architecture: ArchitectureSpec) -> None:
         super().__init__()
         layers: list[nn.Module] = []
         previous_width = input_dim
-        residual = architecture.family == "residual_mlp"
-        widths = architecture.hidden_dims if hidden_dims is None else hidden_dims
-        for width in widths:
+        for width in architecture.flat_hidden_dims:
             layers.append(
-                FeedForwardBlock(
+                MLPBlock(
                     previous_width,
                     width,
                     activation=architecture.activation,
                     normalization=architecture.normalization,
                     dropout=architecture.dropout,
                     use_bias=architecture.use_bias,
-                    residual=residual,
                 )
             )
             previous_width = width
-        self.backbone = nn.Sequential(*layers) if layers else nn.Identity()
+        self.encoder = nn.Sequential(*layers) if layers else nn.Identity()
         self.output_dim = previous_width
-        self.head = nn.Linear(previous_width, output_dim, bias=architecture.use_bias)
-        self.input_skip = (
-            nn.Linear(input_dim, output_dim, bias=False) if USE_INPUT_SKIP else None
-        )
 
-    def encode(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.backbone(inputs)
-
-    def forward(
-        self,
-        flat: torch.Tensor | None = None,
-        *,
-        sequence: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    def forward(self, flat: torch.Tensor | None) -> torch.Tensor | None:
         if flat is None:
-            raise ValueError("RegressionMLP requires flat features.")
-        hidden = self.encode(flat)
-        outputs = self.head(hidden)
-        if self.input_skip is not None:
-            outputs = outputs + self.input_skip(flat)
-        return outputs
+            return None
+        return self.encoder(flat)
 
 
-class SequenceConvEncoder(nn.Module):
-    def __init__(self, context: ArchitectureContext, architecture: ArchitectureSpec) -> None:
+class SequenceEncoder(nn.Module):
+    def __init__(self, embedding_dim: int, architecture: ArchitectureSpec) -> None:
         super().__init__()
-        if context.sequence_embedding_dim is None or context.sequence_length is None:
-            raise ValueError("SequenceConvEncoder requires sequence metadata in the context.")
         layers: list[nn.Module] = []
-        in_channels = context.sequence_embedding_dim
-        for out_channels, kernel_size in zip(
-            architecture.conv_channels,
-            architecture.kernel_sizes,
-            strict=True,
+        previous_channels = embedding_dim
+        for channels, kernel_size in zip(
+            architecture.conv_channels, architecture.kernel_sizes, strict=True
         ):
-            padding = kernel_size // 2
-            layers.extend(
-                [
-                    nn.Conv1d(
-                        in_channels,
-                        out_channels,
-                        kernel_size=kernel_size,
-                        padding=padding,
-                        bias=architecture.use_bias,
-                    ),
-                    nn.BatchNorm1d(out_channels),
-                    make_activation(architecture.activation),
-                    nn.Dropout(architecture.dropout),
-                ]
+            layers.append(
+                SequenceConvBlock(
+                    previous_channels,
+                    channels,
+                    kernel_size=kernel_size,
+                    activation=architecture.activation,
+                    dropout=architecture.dropout,
+                    use_bias=architecture.use_bias,
+                )
             )
-            in_channels = out_channels
-        self.backbone = nn.Sequential(*layers)
-        self.output_dim = in_channels
-        if architecture.pooling == "max":
-            self.pool = nn.AdaptiveMaxPool1d(1)
-        else:
-            self.pool = nn.AdaptiveAvgPool1d(1)
+            previous_channels = channels
+        self.encoder = nn.Sequential(*layers)
+        self.output_dim = previous_channels
+        self.pooling = architecture.pooling
 
-    def forward(self, sequence: torch.Tensor) -> torch.Tensor:
-        encoded = self.backbone(sequence.transpose(1, 2))
-        pooled = self.pool(encoded).squeeze(-1)
-        return pooled
-
-
-class ConvRegressionModel(nn.Module):
-    def __init__(self, context: ArchitectureContext, architecture: ArchitectureSpec) -> None:
-        super().__init__()
-        self.encoder = SequenceConvEncoder(context, architecture)
-        self.head = nn.Linear(self.encoder.output_dim, context.output_dim, bias=architecture.use_bias)
-
-    def forward(
-        self,
-        flat: torch.Tensor | None = None,
-        *,
-        sequence: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        del flat
+    def forward(self, sequence: torch.Tensor | None) -> torch.Tensor | None:
         if sequence is None:
-            raise ValueError("ConvRegressionModel requires sequence features.")
-        hidden = self.encoder(sequence)
-        return self.head(hidden)
+            return None
+        outputs = sequence.transpose(1, 2)
+        outputs = self.encoder(outputs)
+        if self.pooling == "max":
+            outputs = F.adaptive_max_pool1d(outputs, 1)
+        else:
+            outputs = F.adaptive_avg_pool1d(outputs, 1)
+        return outputs.squeeze(-1)
 
 
-class HybridRegressionModel(nn.Module):
+class HybridRegressor(nn.Module):
     def __init__(self, context: ArchitectureContext, architecture: ArchitectureSpec) -> None:
         super().__init__()
-        if context.flat_input_dim is None:
-            raise ValueError("HybridRegressionModel requires flat features.")
-        self.sequence_encoder = SequenceConvEncoder(context, architecture)
-        self.flat_encoder = RegressionMLP(
-            input_dim=context.flat_input_dim,
-            output_dim=context.output_dim,
-            architecture=architecture,
-            hidden_dims=architecture.flat_hidden_dims,
-        )
+        flat_input_dim = context.flat_input_dim or 0
+        sequence_embedding_dim = context.sequence_embedding_dim or 0
+        self.flat_encoder = FlatEncoder(flat_input_dim, architecture)
+        self.sequence_encoder = SequenceEncoder(sequence_embedding_dim, architecture)
+        fusion_input_dim = self.flat_encoder.output_dim + self.sequence_encoder.output_dim
 
         fusion_layers: list[nn.Module] = []
-        previous_width = self.sequence_encoder.output_dim + self.flat_encoder.output_dim
+        previous_width = fusion_input_dim
         for width in architecture.fusion_hidden_dims:
             fusion_layers.append(
-                FeedForwardBlock(
+                MLPBlock(
                     previous_width,
                     width,
                     activation=architecture.activation,
                     normalization=architecture.normalization,
                     dropout=architecture.dropout,
                     use_bias=architecture.use_bias,
-                    residual=False,
                 )
             )
             previous_width = width
-        self.fusion = nn.Sequential(*fusion_layers) if fusion_layers else nn.Identity()
+        self.fusion = nn.Sequential(*fusion_layers)
         self.head = nn.Linear(previous_width, context.output_dim, bias=architecture.use_bias)
 
     def forward(
         self,
-        flat: torch.Tensor | None = None,
         *,
+        flat: torch.Tensor | None = None,
         sequence: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if flat is None or sequence is None:
-            raise ValueError("HybridRegressionModel requires both flat and sequence features.")
-        flat_hidden = self.flat_encoder.encode(flat)
-        sequence_hidden = self.sequence_encoder(sequence)
-        fused = torch.cat([flat_hidden, sequence_hidden], dim=1)
-        return self.head(self.fusion(fused))
+        flat_features = self.flat_encoder(flat)
+        sequence_features = self.sequence_encoder(sequence)
+        if flat_features is None or sequence_features is None:
+            raise ValueError("HybridRegressor requires both flat and sequence inputs.")
+        fused = torch.cat((flat_features, sequence_features), dim=1)
+        hidden = self.fusion(fused)
+        return self.head(hidden)
 
 
 def build_model(context: ArchitectureContext) -> nn.Module:
-    if ARCHITECTURE.family in {"mlp", "residual_mlp"}:
-        return RegressionMLP(
-            input_dim=context.input_dim,
-            output_dim=context.output_dim,
-            architecture=ARCHITECTURE,
-        )
-    if ARCHITECTURE.family == "cnn":
-        return ConvRegressionModel(context, ARCHITECTURE)
-    if ARCHITECTURE.family == "hybrid_cnn_mlp":
-        return HybridRegressionModel(context, ARCHITECTURE)
-    raise ValueError(f"Unsupported architecture family: {ARCHITECTURE.family!r}")
+    return HybridRegressor(context, ARCHITECTURE)
 
 
 def main() -> None:
