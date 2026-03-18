@@ -32,6 +32,8 @@ class DatasetConfig:
     max_sequence_length: int = 32
     allowed_bases: str = "ACGU"
     unknown_base: str = "N"
+    rnafm_sequence_column: str = "antisense_strand_seq"
+    rnafm_embedding_dim: int = 16
 
 
 @dataclass(frozen=True)
@@ -67,9 +69,10 @@ class MetricConfig:
 
 @dataclass(frozen=True)
 class ArchitectureConstraints:
-    allowed_families: tuple[str, ...] = ("mlp", "residual_mlp")
+    allowed_families: tuple[str, ...] = ("mlp", "residual_mlp", "cnn", "hybrid_cnn_mlp")
     allowed_activations: tuple[str, ...] = ("relu", "gelu", "silu")
     allowed_normalizations: tuple[str, ...] = ("none", "layernorm", "batchnorm")
+    allowed_pooling: tuple[str, ...] = ("mean", "max")
     max_hidden_layers: int = 8
     max_hidden_width: int = 1024
     max_dropout: float = 0.5
@@ -121,11 +124,21 @@ FORBIDDEN_ATTRIBUTE_NAMES = {
 @dataclass(frozen=True)
 class ArchitectureSpec:
     family: str
-    hidden_dims: tuple[int, ...]
+    hidden_dims: tuple[int, ...] = ()
     activation: str = "silu"
     dropout: float = 0.1
     normalization: str = "layernorm"
     use_bias: bool = True
+    use_rnafm_embeddings: bool = False
+    sequence_feature_source: str | None = None
+    conv_channels: tuple[int, ...] = ()
+    kernel_sizes: tuple[int, ...] = ()
+    pooling: str = "mean"
+    sequence_encoder_dim: int | None = None
+    flat_hidden_dims: tuple[int, ...] = ()
+    fusion_hidden_dims: tuple[int, ...] = ()
+    rnafm_embedding_dim: int | None = None
+    rnafm_pooling_strategy: str = "none"
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,14 @@ class ArchitectureContext:
     train_size: int
     feature_names: tuple[str, ...]
     device: str
+    flat_input_dim: int | None = None
+    sequence_length: int | None = None
+    sequence_channels: int | None = None
+    sequence_embedding_dim: int | None = None
+    has_flat_features: bool = True
+    has_sequence_features: bool = False
+    flat_feature_names: tuple[str, ...] = ()
+    sequence_source_name: str | None = None
 
 
 class ModelBuilder(Protocol):
@@ -144,7 +165,8 @@ class ModelBuilder(Protocol):
 
 @dataclass
 class PreparedDataset:
-    features: pd.DataFrame
+    flat_features: pd.DataFrame | None
+    sequence_features: np.ndarray | None
     target: np.ndarray
     genes: np.ndarray
     row_ids: np.ndarray
@@ -154,6 +176,29 @@ class PreparedDataset:
     test_genes: tuple[str, ...]
     cv_genes: tuple[str, ...]
     source_path: str
+    sequence_feature_name: str | None = None
+    sequence_feature_shape: tuple[int, ...] | None = None
+
+    @property
+    def features(self) -> pd.DataFrame:
+        if self.flat_features is None:
+            return pd.DataFrame(index=pd.RangeIndex(len(self.target)))
+        return self.flat_features
+
+    @property
+    def has_flat_features(self) -> bool:
+        return self.flat_features is not None and not self.flat_features.empty
+
+    @property
+    def has_sequence_features(self) -> bool:
+        return self.sequence_features is not None
+
+    @property
+    def feature_dim(self) -> int:
+        flat_dim = 0 if self.flat_features is None else int(self.flat_features.shape[1])
+        if self.sequence_features is None:
+            return flat_dim
+        return flat_dim + int(np.prod(self.sequence_features.shape[1:], dtype=np.int64))
 
 
 @dataclass(frozen=True)

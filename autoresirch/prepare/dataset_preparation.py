@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .data.rnafm import build_rnafm_embedding_tensor
 from .schemas import (
     CACHE_DIR,
     DATASET_CONFIG,
@@ -203,18 +204,26 @@ def build_prepared_dataset_from_frame(
     *,
     dataset_config: DatasetConfig = DATASET_CONFIG,
     split_config: SplitConfig = SPLIT_CONFIG,
+    include_rnafm_embeddings: bool = False,
 ) -> PreparedDataset:
     required_columns = {
         dataset_config.target_column,
         dataset_config.gene_column,
         *dataset_config.sequence_columns,
     }
+    if include_rnafm_embeddings:
+        required_columns.add(dataset_config.rnafm_sequence_column)
     missing_columns = sorted(required_columns.difference(dataframe.columns))
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
     working_frame = dataframe.copy()
-    working_frame = working_frame.drop(columns=list(dataset_config.drop_columns), errors="ignore")
+    drop_columns = list(dataset_config.drop_columns)
+    if include_rnafm_embeddings and dataset_config.rnafm_sequence_column in drop_columns:
+        drop_columns = [
+            column for column in drop_columns if column != dataset_config.rnafm_sequence_column
+        ]
+    working_frame = working_frame.drop(columns=drop_columns, errors="ignore")
     working_frame = working_frame.dropna(
         subset=[dataset_config.target_column, dataset_config.gene_column]
     ).reset_index(drop=True)
@@ -253,8 +262,24 @@ def build_prepared_dataset_from_frame(
         )
 
     feature_frame = pd.concat([numeric_feature_frame, categorical_feature_frame], axis=1)
-    if feature_frame.empty:
-        raise ValueError("Feature matrix is empty. Configure numeric/categorical/sequence columns.")
+    sequence_tensor: np.ndarray | None = None
+    sequence_feature_name: str | None = None
+    sequence_feature_shape: tuple[int, ...] | None = None
+    if include_rnafm_embeddings:
+        sequence_tensor = build_rnafm_embedding_tensor(
+            working_frame[dataset_config.rnafm_sequence_column],
+            max_length=dataset_config.max_sequence_length,
+            embedding_dim=dataset_config.rnafm_embedding_dim,
+            allowed_bases=dataset_config.allowed_bases,
+            unknown_base=dataset_config.unknown_base,
+        )
+        sequence_feature_name = f"rnafm::{dataset_config.rnafm_sequence_column}"
+        sequence_feature_shape = tuple(sequence_tensor.shape[1:])
+
+    if feature_frame.empty and sequence_tensor is None:
+        raise ValueError(
+            "Feature matrix is empty. Configure numeric/categorical/sequence columns or enable RNA-FM."
+        )
 
     genes = working_frame[dataset_config.gene_column].map(
         lambda value: normalize_gene_label(value, dataset_config.gene_normalization)
@@ -276,7 +301,8 @@ def build_prepared_dataset_from_frame(
         raise ValueError("Target column contains non-numeric values after coercion.")
 
     return PreparedDataset(
-        features=feature_frame,
+        flat_features=feature_frame if not feature_frame.empty else None,
+        sequence_features=sequence_tensor,
         target=target,
         genes=genes,
         row_ids=np.arange(len(working_frame), dtype=np.int64),
@@ -286,6 +312,8 @@ def build_prepared_dataset_from_frame(
         test_genes=test_genes,
         cv_genes=cv_genes,
         source_path=str(dataset_config.raw_data_path),
+        sequence_feature_name=sequence_feature_name,
+        sequence_feature_shape=sequence_feature_shape,
     )
 
 
@@ -294,14 +322,22 @@ def prepare_dataset(
     dataset_config: DatasetConfig = DATASET_CONFIG,
     split_config: SplitConfig = SPLIT_CONFIG,
     force: bool = False,
+    include_rnafm_embeddings: bool = False,
 ) -> PreparedDataset:
     ensure_runtime_dirs()
-    artifact_path = CACHE_DIR / "prepared_dataset.pkl"
-    metadata_path = CACHE_DIR / "prepared_dataset_metadata.json"
+    artifact_suffix = "_rnafm" if include_rnafm_embeddings else ""
+    artifact_path = CACHE_DIR / f"prepared_dataset{artifact_suffix}.pkl"
+    metadata_path = CACHE_DIR / f"prepared_dataset_metadata{artifact_suffix}.json"
 
     source_path = dataset_config.raw_data_path
     source_mtime = source_path.stat().st_mtime if source_path.exists() else None
-    fingerprint = _config_fingerprint()
+    fingerprint = json.dumps(
+        {
+            "base_fingerprint": _config_fingerprint(),
+            "include_rnafm_embeddings": include_rnafm_embeddings,
+        },
+        sort_keys=True,
+    )
 
     if not force and artifact_path.exists() and metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -320,6 +356,7 @@ def prepare_dataset(
         dataframe,
         dataset_config=dataset_config,
         split_config=split_config,
+        include_rnafm_embeddings=include_rnafm_embeddings,
     )
 
     with artifact_path.open("wb") as handle:
@@ -343,7 +380,11 @@ def print_dataset_summary(prepared: PreparedDataset) -> None:
     print("---")
     print(f"dataset_path:      {prepared.source_path}")
     print(f"rows:              {len(prepared.target)}")
-    print(f"features:          {prepared.features.shape[1]}")
+    print(f"flat_features:     {prepared.features.shape[1]}")
+    if prepared.has_sequence_features and prepared.sequence_feature_shape is not None:
+        print(f"sequence_features: {prepared.sequence_feature_name} {prepared.sequence_feature_shape}")
+    else:
+        print("sequence_features: -")
     print(f"train_genes:       {len(prepared.train_genes)}")
     print(f"test_genes:        {len(prepared.test_genes)}")
     print(f"cv_folds:          {len(prepared.cv_genes)}")

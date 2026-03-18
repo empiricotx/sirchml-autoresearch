@@ -19,16 +19,38 @@ def validate_architecture_spec(
         raise ValueError(f"Unsupported activation: {spec.activation!r}")
     if spec.normalization not in constraints.allowed_normalizations:
         raise ValueError(f"Unsupported normalization: {spec.normalization!r}")
+    if spec.pooling not in constraints.allowed_pooling:
+        raise ValueError(f"Unsupported pooling: {spec.pooling!r}")
     if not constraints.allow_bias and spec.use_bias:
         raise ValueError("Bias parameters are disabled by ArchitectureConstraints.")
     if len(spec.hidden_dims) > constraints.max_hidden_layers:
         raise ValueError("Too many hidden layers in ArchitectureSpec.hidden_dims.")
     if any(width <= 0 or width > constraints.max_hidden_width for width in spec.hidden_dims):
         raise ValueError("ArchitectureSpec.hidden_dims contains an invalid layer width.")
+    if len(spec.conv_channels) > constraints.max_hidden_layers:
+        raise ValueError("Too many convolution layers in ArchitectureSpec.conv_channels.")
+    if any(width <= 0 or width > constraints.max_hidden_width for width in spec.conv_channels):
+        raise ValueError("ArchitectureSpec.conv_channels contains an invalid channel width.")
+    if any(kernel <= 0 for kernel in spec.kernel_sizes):
+        raise ValueError("ArchitectureSpec.kernel_sizes must be positive.")
     if spec.dropout < 0 or spec.dropout > constraints.max_dropout:
         raise ValueError(
             f"Dropout must be between 0 and {constraints.max_dropout}, got {spec.dropout}."
         )
+    if spec.family in {"cnn", "hybrid_cnn_mlp"}:
+        if not spec.conv_channels:
+            raise ValueError(f"{spec.family!r} requires conv_channels.")
+        if len(spec.conv_channels) != len(spec.kernel_sizes):
+            raise ValueError("conv_channels and kernel_sizes must have the same length.")
+    if spec.family == "hybrid_cnn_mlp":
+        if not spec.use_rnafm_embeddings:
+            raise ValueError("hybrid_cnn_mlp requires use_rnafm_embeddings=True.")
+        if not spec.flat_hidden_dims:
+            raise ValueError("hybrid_cnn_mlp requires flat_hidden_dims.")
+        if not spec.fusion_hidden_dims:
+            raise ValueError("hybrid_cnn_mlp requires fusion_hidden_dims.")
+    if spec.family == "cnn" and not spec.use_rnafm_embeddings:
+        raise ValueError("cnn requires use_rnafm_embeddings=True.")
 
 
 def validate_train_source(path: Path) -> None:

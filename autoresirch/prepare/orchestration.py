@@ -160,7 +160,11 @@ def run_experiment(
         build_model = loaded.build_model
 
     validate_architecture_spec(architecture, constraints)
-    prepared = prepare_dataset(dataset_config=dataset_config, split_config=split_config)
+    prepared = prepare_dataset(
+        dataset_config=dataset_config,
+        split_config=split_config,
+        include_rnafm_embeddings=architecture.use_rnafm_embeddings,
+    )
     folds = build_cv_folds(prepared)
     fold_budget, final_budget = validate_budget(
         len(folds),
@@ -205,7 +209,7 @@ def run_experiment(
 
     active_run_dir = run_dir
     if active_run_dir is None:
-        active_run_dir = _make_run_dir()
+        active_run_dir = _make_run_dir(RUNS_DIR)
     else:
         active_run_dir.mkdir(parents=True, exist_ok=True)
     summary = ExperimentSummary(
@@ -258,7 +262,7 @@ def run_experiment(
         ),
         num_params=num_params,
         train_seconds=time.perf_counter() - start,
-        feature_dim=prepared.features.shape[1],
+        feature_dim=prepared.feature_dim,
         num_rows=len(prepared.target),
         cv_folds=len(folds),
         train_genes=prepared.train_genes,

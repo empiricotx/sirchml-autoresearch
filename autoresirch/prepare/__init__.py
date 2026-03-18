@@ -1,3 +1,4 @@
+from .data import build_rnafm_embedding_tensor
 from .architecture_loading import (
     _extract_loaded_architecture,
     load_train_definition,
@@ -135,6 +136,7 @@ __all__ = [
     "_state_dict_to_cpu",
     "_normalize_model_output",
     "_make_run_dir",
+    "build_rnafm_embedding_tensor",
 
     # Dataset Preparation
     "read_raw_dataframe",

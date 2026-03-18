@@ -198,6 +198,12 @@ def _normalize_model_output(output: torch.Tensor) -> torch.Tensor:
 def _make_run_dir(root: Path | None = None) -> Path:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     run_root = root or RUNS_DIR
-    run_dir = run_root / timestamp
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir
+    for suffix in range(1000):
+        run_name = timestamp if suffix == 0 else f"{timestamp}-{suffix:03d}"
+        run_dir = run_root / run_name
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            return run_dir
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"Could not allocate a unique run directory under {run_root}.")

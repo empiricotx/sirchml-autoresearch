@@ -10,8 +10,10 @@ from torch import nn
 
 import autoresirch.prepare as prepare_package
 import prepare as prepare_module
+from autoresirch.prepare import orchestration as orchestration_module
 from prepare import (
     ArchitectureSpec,
+    ArchitectureContext,
     DatasetConfig,
     FoldResult,
     MetricConfig,
@@ -35,6 +37,14 @@ def make_dataset() -> pd.DataFrame:
         {
             "gene": ["GENE1", "GENE1", "GENE2", "GENE2", "GENE3", "GENE3"],
             "target": [0.2, 0.3, 0.5, 0.6, 0.1, 0.15],
+            "antisense_strand_seq": [
+                "AUGCUA",
+                "AUGCAA",
+                "CCGAUU",
+                "CCGAUC",
+                "UUUGGA",
+                "UUUGGC",
+            ],
             "sirna_sequence": [
                 "AUGCUA",
                 "AUGCAA",
@@ -65,6 +75,18 @@ def make_auc_ready_dataset() -> pd.DataFrame:
                 "GENE3",
             ],
             "target": [0.2, 0.6, 0.25, 0.7, 0.1, 0.8, 0.3, 0.9, 0.2, 0.5],
+            "antisense_strand_seq": [
+                "AUGCUA",
+                "AUGCAA",
+                "AUGCUG",
+                "AUGCUC",
+                "CCGAUU",
+                "CCGAUC",
+                "CCGAUA",
+                "CCGAUG",
+                "UUUGGA",
+                "UUUGGC",
+            ],
             "sirna_sequence": [
                 "AUGCUA",
                 "AUGCAA",
@@ -93,7 +115,7 @@ def test_build_prepared_dataset_respects_gene_splits() -> None:
             sequence_columns=(),
             numeric_columns=(),
             categorical_columns=(),
-            drop_columns=("sirna_sequence",),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
             explicit_test_genes=("GENE3",),
             explicit_cv_genes=("GENE1", "GENE2"),
             max_sequence_length=6,
@@ -116,7 +138,7 @@ def test_build_cv_folds_holds_out_one_gene_per_fold() -> None:
             target_column="target",
             gene_column="gene",
             sequence_columns=(),
-            drop_columns=("sirna_sequence",),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
             explicit_test_genes=("GENE3",),
             explicit_cv_genes=("GENE1", "GENE2"),
             max_sequence_length=6,
@@ -140,6 +162,7 @@ def test_gene_normalization_collapses_case_variants() -> None:
         {
             "gene": ["CPN1", "Cpn1", "OTHER", "OTHER"],
             "target": [0.1, 0.2, 0.3, 0.4],
+            "antisense_strand_seq": ["AUGC", "AUGG", "CCGU", "CCGA"],
             "feature_score": [1.0, 1.1, 2.0, 2.1],
         }
     )
@@ -161,6 +184,58 @@ def test_gene_normalization_collapses_case_variants() -> None:
     assert tuple(prepared.genes) == ("CPN1", "CPN1", "OTHER", "OTHER")
     assert prepared.train_genes == ("CPN1", "OTHER")
     assert prepared.cv_genes == ("CPN1", "OTHER")
+
+
+def test_build_prepared_dataset_can_include_rnafm_embeddings() -> None:
+    prepared = build_prepared_dataset_from_frame(
+        make_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            max_sequence_length=6,
+            rnafm_embedding_dim=12,
+        ),
+        include_rnafm_embeddings=True,
+    )
+
+    assert prepared.has_flat_features
+    assert prepared.has_sequence_features
+    assert prepared.sequence_feature_name == "rnafm::antisense_strand_seq"
+    assert prepared.sequence_features is not None
+    assert prepared.sequence_features.shape == (6, 6, 12)
+    np.testing.assert_allclose(prepared.sequence_features[0, 0, :4], np.array([1.0, 0.0, 0.0, 0.0]))
+
+
+def test_validate_architecture_spec_accepts_hybrid_and_rejects_missing_toggle() -> None:
+    validate_architecture_spec(
+        ArchitectureSpec(
+            family="hybrid_cnn_mlp",
+            use_rnafm_embeddings=True,
+            conv_channels=(16, 32),
+            kernel_sizes=(5, 3),
+            flat_hidden_dims=(32,),
+            fusion_hidden_dims=(16,),
+        )
+    )
+
+    try:
+        validate_architecture_spec(
+            ArchitectureSpec(
+                family="hybrid_cnn_mlp",
+                use_rnafm_embeddings=False,
+                conv_channels=(16,),
+                kernel_sizes=(3,),
+                flat_hidden_dims=(32,),
+                fusion_hidden_dims=(16,),
+            )
+        )
+    except ValueError as exc:
+        assert "use_rnafm_embeddings=True" in str(exc)
+    else:
+        raise AssertionError("Expected hybrid validation to require use_rnafm_embeddings=True.")
 
 
 def test_weighted_cv_rmse_mean_uses_fold_sizes() -> None:
@@ -284,13 +359,13 @@ def test_run_experiment_writes_to_custom_run_dir_and_diagnostics(
             target_column="target",
             gene_column="gene",
             sequence_columns=(),
-            drop_columns=("sirna_sequence",),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
             explicit_test_genes=("GENE3",),
             explicit_cv_genes=("GENE1", "GENE2"),
             max_sequence_length=6,
         ),
     )
-    monkeypatch.setattr(prepare_module, "prepare_dataset", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(orchestration_module, "prepare_dataset", lambda *args, **kwargs: prepared)
 
     def build_model(context) -> nn.Module:
         return nn.Linear(context.input_dim, context.output_dim)
@@ -341,14 +416,14 @@ def test_run_experiment_compatibility_without_custom_run_dir(
             target_column="target",
             gene_column="gene",
             sequence_columns=(),
-            drop_columns=("sirna_sequence",),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
             explicit_test_genes=("GENE3",),
             explicit_cv_genes=("GENE1", "GENE2"),
             max_sequence_length=6,
         ),
     )
-    monkeypatch.setattr(prepare_module, "prepare_dataset", lambda *args, **kwargs: prepared)
-    monkeypatch.setattr(prepare_module, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(orchestration_module, "prepare_dataset", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(orchestration_module, "RUNS_DIR", tmp_path / "runs")
 
     def build_model(context) -> nn.Module:
         torch.manual_seed(0)
@@ -396,3 +471,79 @@ def test_refactored_prepare_cli_uses_dataset_preparation_exports() -> None:
         "print_dataset_summary",
         prepare_package.print_dataset_summary,
     ) or callable(prepare_package.print_dataset_summary)
+
+
+def test_run_experiment_supports_hybrid_batches(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    prepared = build_prepared_dataset_from_frame(
+        make_auc_ready_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            max_sequence_length=6,
+            rnafm_embedding_dim=8,
+        ),
+        include_rnafm_embeddings=True,
+    )
+    monkeypatch.setattr(orchestration_module, "prepare_dataset", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(orchestration_module, "RUNS_DIR", tmp_path / "runs")
+
+    class TinyHybrid(nn.Module):
+        def __init__(self, context: ArchitectureContext) -> None:
+            super().__init__()
+            assert context.flat_input_dim is not None
+            assert context.sequence_embedding_dim is not None
+            self.flat = nn.Linear(context.flat_input_dim, 8)
+            self.sequence = nn.Conv1d(context.sequence_embedding_dim, 4, kernel_size=3, padding=1)
+            self.head = nn.Linear(12, context.output_dim)
+
+        def forward(
+            self,
+            flat: torch.Tensor | None = None,
+            *,
+            sequence: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            assert flat is not None
+            assert sequence is not None
+            flat_hidden = torch.relu(self.flat(flat))
+            sequence_hidden = torch.relu(self.sequence(sequence.transpose(1, 2))).mean(dim=2)
+            return self.head(torch.cat([flat_hidden, sequence_hidden], dim=1))
+
+    def build_model(context: ArchitectureContext) -> nn.Module:
+        return TinyHybrid(context)
+
+    summary = run_experiment(
+        architecture=ArchitectureSpec(
+            family="hybrid_cnn_mlp",
+            use_rnafm_embeddings=True,
+            conv_channels=(8,),
+            kernel_sizes=(3,),
+            flat_hidden_dims=(8,),
+            fusion_hidden_dims=(8,),
+            activation="relu",
+            dropout=0.0,
+            normalization="none",
+        ),
+        build_model=build_model,
+        training_config=TrainingConfig(
+            total_time_budget_seconds=0.02,
+            cv_budget_ratio=1.0,
+            evaluate_test_split=False,
+            batch_size=2,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            grad_clip_norm=None,
+            min_fold_budget_seconds=0.0,
+            min_final_fit_budget_seconds=0.0,
+            device="cpu",
+        ),
+    )
+
+    assert summary.feature_dim > prepared.features.shape[1]
