@@ -7,12 +7,18 @@ Extend the fixed `autoresirch.prepare` harness so it can support:
 - flat/tabular models
 - convolutional models over sequence-like tensor inputs
 - hybrid models that consume both tensor inputs and flat features
+- optional RNA-FM embeddings extracted from `antisense_strand_seq`
 
 without forking the entire experiment system.
 
 The goal is not to create separate end-to-end pipelines for MLP and CNN training. The goal is to
 create one shared experiment harness with modality-specific data preparation, preprocessing, and
 model branches.
+
+For the first hybrid-sequence feature, the system should support a prepare-time submodule that
+extracts RNA-FM embeddings from `antisense_strand_seq`, persists them as a reusable feature
+artifact, and allows each run to opt in or out of using those embeddings alongside the existing
+flat feature set from the `data/` folder.
 
 ## Design Principle
 
@@ -53,6 +59,10 @@ Current assumptions:
   converts sequence-like columns into flattened tabular features rather than CNN-ready tensors
 - [autoresirch/prepare/schemas.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/schemas.py)
   only allows `mlp` and `residual_mlp`
+- there is no prepare submodule dedicated to generating reusable RNA-FM embeddings from
+  `antisense_strand_seq`
+- there is no run-level configuration switch that says whether RNA-FM embeddings should be included
+  in the feature set for a specific experiment
 
 These assumptions need to be relaxed, but only at the data-contract and batch-construction layers.
 
@@ -68,19 +78,31 @@ Create separate data builders for:
 - flat/tabular features
 - tensor/sequence features
 - multimodal assembly
+- RNA-FM embedding extraction from `antisense_strand_seq`
 
 Suggested modules:
 
 - `autoresirch/prepare/data/shared.py`
 - `autoresirch/prepare/data/flat.py`
 - `autoresirch/prepare/data/sequence.py`
+- `autoresirch/prepare/data/rnafm.py`
 - `autoresirch/prepare/data/multimodal.py`
 
 Why duplication is appropriate:
 
 - flat features need numeric coercion, categorical inference, one-hot expansion
-- tensor features need vocabulary encoding, padding/truncation, channel layout
+- tensor features need either tokenized sequence handling or pretrained embedding extraction
+- RNA-FM extraction has its own dependency, caching, and shape contract that should not be mixed
+  into tabular builders
 - hybrid mode needs aligned assembly, not a third independent representation
+
+RNA-FM-specific expectations:
+
+- source column is `antisense_strand_seq`
+- output is one tensor block per row with a stable embedding shape
+- extracted embeddings should be stored as a reusable prepared artifact so repeated runs do not
+  recompute them unnecessarily
+- multimodal assembly should include the RNA-FM block only when the run configuration enables it
 
 ### 2. Preprocessors
 
@@ -141,6 +163,7 @@ Required adaptation:
   - `residual_mlp`
   - `cnn`
   - `hybrid_cnn_mlp`
+- add a run-level feature toggle such as `use_rnafm_embeddings: bool`
 - add family-specific optional fields such as:
   - `conv_channels`
   - `kernel_sizes`
@@ -148,11 +171,17 @@ Required adaptation:
   - `sequence_encoder_dim`
   - `flat_hidden_dims`
   - `fusion_hidden_dims`
+- add RNA-FM-specific optional fields such as:
+  - `sequence_feature_source`
+  - `rnafm_embedding_dim`
+  - `rnafm_pooling_strategy`
 
 Important constraint:
 
 - do not force CNN configuration into `hidden_dims`
 - family-specific fields should be explicit
+- the decision to include RNA-FM embeddings should be explicit at run start, not inferred from
+  whether an embedding artifact happens to exist
 
 ### 2. `ArchitectureContext`
 
@@ -166,6 +195,8 @@ Required adaptation:
   - `flat_input_dim: int | None`
   - `sequence_channels: int | None`
   - `sequence_length: int | None`
+  - `sequence_embedding_dim: int | None`
+  - `sequence_source_name: str | None`
   - `has_flat_features: bool`
   - `has_sequence_features: bool`
   - `flat_feature_names: tuple[str, ...]`
@@ -201,6 +232,7 @@ A good direction is:
   - flat feature names
 - optional sequence block:
   - encoded tensor-ready source
+  - RNA-FM embedding source metadata when enabled
   - tensor shape metadata
 
 Reason:
@@ -364,16 +396,23 @@ The clean multimodal flow is:
 2. Build aligned row metadata once.
 3. Build optional flat feature sources.
 4. Build optional tensor/sequence sources.
-5. Store both under one `PreparedDataset`.
-6. Use one shared fold index definition.
-7. Preprocess each modality on the training slice only.
-8. Return train/validation batches containing both modalities.
-9. Let hybrid models fuse the encoded branches inside the model.
+5. Extract or load cached RNA-FM embeddings from `antisense_strand_seq` when the run enables them.
+6. Store both under one `PreparedDataset`.
+7. Use one shared fold index definition.
+8. Preprocess each modality on the training slice only.
+9. Return train/validation batches containing both modalities.
+10. Let hybrid models fuse the encoded branches inside the model.
 
 The important boundary is:
 
 - preprocessing assembles aligned modality-specific inputs
 - the model owns fusion
+
+For the first hybrid implementation:
+
+- RNA-FM embeddings are the input to the convolutional head
+- existing flat features from the `data/` folder are the input to the flat MLP head
+- the hybrid model fuses the outputs of those two heads after branch-specific encoding
 
 Do not fuse features by flattening tensor inputs back into tabular form just to reuse the current
 MLP path. That would defeat the purpose of CNN support.
@@ -392,6 +431,7 @@ autoresirch/prepare/
     shared.py
     flat.py
     sequence.py
+    rnafm.py
     multimodal.py
   preprocessing/
     flat.py
@@ -415,8 +455,12 @@ Role of each:
   - build flat feature sources
 - `data/sequence.py`
   - encode sequence inputs into tensor-ready format
+- `data/rnafm.py`
+  - extract or load cached RNA-FM embeddings from `antisense_strand_seq`
+  - validate embedding shape and row alignment
 - `data/multimodal.py`
   - assemble `PreparedDataset`
+  - honor the run-level switch for including RNA-FM embeddings
 - `preprocessing/flat.py`
   - fit/transform flat features
 - `preprocessing/sequence.py`
@@ -461,6 +505,7 @@ Should be split:
 - shared raw-data/split logic stays conceptually shared
 - flat feature extraction moves to flat-specific module
 - tensor feature extraction moves to sequence-specific module
+- RNA-FM extraction/loading moves to its own submodule
 - multimodal assembly becomes explicit
 
 ### `autoresirch/prepare/fold_preprocessor.py`
@@ -493,6 +538,7 @@ Should be adapted:
 Should remain mostly shared:
 
 - use new dataset contracts
+- pass the run-level choice about whether RNA-FM embeddings are enabled
 - keep run summaries, budgets, fold execution, and metrics common
 
 ### `autoresirch/train.py`
@@ -521,6 +567,9 @@ Done when:
 
 - flat-only dataset prep still works
 - sequence/tensor builder exists independently
+- RNA-FM embeddings can be extracted from `antisense_strand_seq` through a dedicated prepare
+  submodule
+- RNA-FM embeddings can be reused from artifacts rather than recomputed for every run
 - multimodal assembly aligns rows and targets correctly
 
 ### Phase 3. Preprocessing Split
@@ -545,6 +594,9 @@ Done when:
 
 - `cnn` and `hybrid_cnn_mlp` are valid families
 - model validation handles them cleanly
+- the run configuration can explicitly enable or disable RNA-FM embeddings
+- the hybrid architecture routes RNA-FM embeddings to the convolutional branch and existing flat
+  features to the MLP branch
 - `autoresirch/train.py` can define and run them
 
 ### Phase 6. Test Coverage
@@ -554,6 +606,9 @@ Add tests for:
 - flat-only prepared dataset
 - tensor-only prepared dataset
 - hybrid prepared dataset
+- RNA-FM embedding extraction from `antisense_strand_seq`
+- RNA-FM artifact reuse and row alignment
+- run-level enabling/disabling of RNA-FM features
 - row alignment across flat/tensor branches
 - multimodal dataloader batch structure
 - CNN family validation
@@ -567,6 +622,10 @@ Add tests for:
 - The training harness accepts structured multimodal batches without duplicating the train loop.
 - CNN models can consume tensor features without flattening them into tabular inputs.
 - Hybrid models can consume both tensor inputs and flat features in the same batch.
+- A run can explicitly opt in or out of RNA-FM embeddings at the start of execution.
+- When enabled, RNA-FM embeddings are extracted from `antisense_strand_seq` and fed to the
+  convolutional branch rather than flattened into tabular inputs.
+- The hybrid model uses existing `data/` folder features as the flat MLP branch input.
 - Session artifacts and summary files remain unchanged in structure unless a deliberate schema
   extension is required.
 - Metric calculation and keep/discard logic remain shared across all model families.
