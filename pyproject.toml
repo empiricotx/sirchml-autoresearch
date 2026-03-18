@@ -5,6 +5,7 @@ description = "Constrained autonomous architecture search for siRNA regression"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "docker>=7.1.0",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
     "pyarrow>=23.0.1",

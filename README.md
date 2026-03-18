@@ -127,6 +127,32 @@ uv run python session_manager.py start
 pytest
 ```
 
+## Session viewer scaffold
+
+The repository now includes a basic Dockerized scaffold for a read-only session viewer:
+
+```bash
+docker compose up --build
+```
+
+Then open:
+
+- frontend: `http://localhost:5173`
+- API: `http://localhost:8000`
+
+The stack mounts `sessions/` read-only into the API container and exposes:
+
+- `GET /sessions`
+- `GET /sessions/{session_id}`
+- `GET /sessions/{session_id}/runs`
+- `GET /sessions/{session_id}/runs/{run_id}`
+
+The scaffold lives under:
+
+- `frontend/api/`
+- `frontend/web/`
+- `docker-compose.yml`
+
 ## Repo structure
 
 ```text

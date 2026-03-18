@@ -11,7 +11,7 @@ ARCHITECTURE = ArchitectureSpec(
     family="hybrid_cnn_mlp",
     hidden_dims=(64,),
     activation="silu",
-    dropout=0.1,
+    dropout=0.15,
     normalization="none",
     use_bias=True,
     use_rnafm_embeddings=True,
@@ -19,8 +19,8 @@ ARCHITECTURE = ArchitectureSpec(
     conv_channels=(32, 64),
     kernel_sizes=(5, 3),
     pooling="mean",
-    flat_hidden_dims=(192, 96),
-    fusion_hidden_dims=(160, 64),
+    flat_hidden_dims=(128, 32),
+    fusion_hidden_dims=(64, 32),
     rnafm_pooling_strategy="mean",
 )
 

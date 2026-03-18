@@ -1,0 +1,20 @@
+services:
+  api:
+    build:
+      context: ./frontend/api
+    environment:
+      SESSIONS_ROOT: /workspace/sessions
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./sessions:/workspace/sessions:ro
+
+  web:
+    build:
+      context: ./frontend/web
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
