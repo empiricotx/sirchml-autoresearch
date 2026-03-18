@@ -329,6 +329,7 @@ def train_fold(
     best_diagnostics: FoldDiagnostics | None = None
     best_state: dict[str, torch.Tensor] | None = None
     best_epoch = 0
+    epochs_without_improvement = 0
     deadline = time.perf_counter() + budget_seconds
     epoch = 0
     start = time.perf_counter()
@@ -356,6 +357,14 @@ def train_fold(
             best_diagnostics = build_fold_diagnostics(val_target, val_prediction)
             best_epoch = epoch
             best_state = _state_dict_to_cpu(model)
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+        if (
+            training_config.early_stopping_patience is not None
+            and epochs_without_improvement >= training_config.early_stopping_patience
+        ):
+            break
         if time.perf_counter() >= deadline:
             break
 

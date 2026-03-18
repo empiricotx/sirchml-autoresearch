@@ -11,6 +11,7 @@ from torch import nn
 import autoresirch.prepare as prepare_package
 import prepare as prepare_module
 from autoresirch.prepare import orchestration as orchestration_module
+from autoresirch.prepare import training_harness as training_harness_module
 from prepare import (
     ArchitectureSpec,
     ArchitectureContext,
@@ -27,6 +28,7 @@ from prepare import (
     load_train_definition,
     run_experiment,
     scale_regression_predictions,
+    train_fold,
     validate_architecture_spec,
     validate_train_source,
 )
@@ -547,3 +549,75 @@ def test_run_experiment_supports_hybrid_batches(
     )
 
     assert summary.feature_dim > prepared.features.shape[1]
+
+
+def test_train_fold_stops_after_20_non_improving_epochs(monkeypatch) -> None:
+    prepared = build_prepared_dataset_from_frame(
+        make_auc_ready_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            max_sequence_length=6,
+        ),
+    )
+    fold = build_cv_folds(prepared)[0]
+
+    monkeypatch.setattr(training_harness_module, "_train_epoch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        training_harness_module,
+        "predict_regression",
+        lambda *args, **kwargs: np.full(len(prepared.target[fold.val_indices]), 0.5, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        training_harness_module,
+        "evaluate_predictions",
+        lambda *args, **kwargs: RegressionMetrics(
+            rmse=0.25,
+            mae=0.2,
+            r2=0.0,
+            squared_error_sum=1.0,
+            auc=0.5,
+            pearson_r=0.0,
+            spearman_r=0.0,
+        ),
+    )
+
+    def build_model(context: ArchitectureContext) -> nn.Module:
+        return nn.Linear(context.input_dim, context.output_dim)
+
+    result = train_fold(
+        prepared,
+        fold,
+        ArchitectureSpec(
+            family="mlp",
+            hidden_dims=(8,),
+            activation="relu",
+            dropout=0.0,
+            normalization="none",
+            use_bias=True,
+        ),
+        build_model,
+        training_config=TrainingConfig(
+            total_time_budget_seconds=1000.0,
+            cv_budget_ratio=1.0,
+            evaluate_test_split=False,
+            batch_size=2,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            grad_clip_norm=None,
+            min_fold_budget_seconds=0.0,
+            min_final_fit_budget_seconds=0.0,
+            early_stopping_patience=20,
+            device="cpu",
+        ),
+        seed=7,
+        budget_seconds=1000.0,
+    )
+
+    assert result.best_epoch == 1
+    assert result.epochs == 21

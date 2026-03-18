@@ -54,6 +54,7 @@ class TrainingConfig:
     grad_clip_norm: float | None = 5.0
     min_fold_budget_seconds: float = 1.0
     min_final_fit_budget_seconds: float = 5.0
+    early_stopping_patience: int | None = 20
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
 
