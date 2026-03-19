@@ -1,4 +1,4 @@
-from autoresirch.session_manager.analysis import (
+from autoresirch.session_manager.shared.analysis import (
     record_agent_analysis,
     write_run_synopsis,
     write_session_summary,
@@ -25,7 +25,7 @@ from autoresirch.session_manager.constants import (
     SESSION_RESULTS_HEADER,
     SESSIONS_DIR,
 )
-from autoresirch.session_manager.orchestration import (
+from autoresirch.session_manager.shared.orchestration import (
     create_session,
     finalize_session,
     run_session_experiment,
@@ -43,7 +43,7 @@ from autoresirch.session_manager.schemas import (
     SessionState,
     SessionSummaryRecord,
 )
-from autoresirch.session_manager.storage import (
+from autoresirch.session_manager.shared.storage import (
     _collect_git_metadata,
     _load_architecture_metadata,
     _session_results_path,

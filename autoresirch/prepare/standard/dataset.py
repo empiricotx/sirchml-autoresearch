@@ -9,8 +9,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .data.rnafm import build_rnafm_embedding_tensor
-from .schemas import (
+from autoresirch.prepare.comparative.dataset import build_comparative_prepared_dataset_from_frame
+from autoresirch.prepare.data.rnafm import build_rnafm_embedding_tensor
+from autoresirch.prepare.shared.schemas import (
     CACHE_DIR,
     DATASET_CONFIG,
     METRIC_CONFIG,
@@ -19,7 +20,11 @@ from .schemas import (
     PreparedDataset,
     SplitConfig,
 )
-from .utils import _config_fingerprint, ensure_runtime_dirs, resolve_primary_metric_name
+from autoresirch.prepare.shared.utils import (
+    _config_fingerprint,
+    ensure_runtime_dirs,
+    resolve_primary_metric_name,
+)
 
 def read_raw_dataframe(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -211,10 +216,6 @@ def build_prepared_dataset_from_frame(
             raise NotImplementedError(
                 "Comparative mode does not support RNA-FM sequence tensors yet."
             )
-        from autoresirch.prepare.comparative.dataset import (
-            build_comparative_prepared_dataset_from_frame,
-        )
-
         return build_comparative_prepared_dataset_from_frame(
             dataframe,
             dataset_config=dataset_config,

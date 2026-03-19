@@ -1,4 +1,4 @@
-from autoresirch.session_manager.shared.metrics import (
+from autoresirch.session_manager.comparative.metrics import (
     COMPARATIVE_ANALYSIS_INPUT_METRIC_ORDER,
     COMPARATIVE_INTERPRETATION_METRIC_ORDER,
     COMPARATIVE_INTERPRETATION_METRIC_SPECS,

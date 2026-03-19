@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from torch import nn
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 CACHE_DIR = REPO_ROOT / ".cache" / "sirna_regression"
 RUNS_DIR = REPO_ROOT / "runs"
 DATA_DIR = REPO_ROOT / "data"

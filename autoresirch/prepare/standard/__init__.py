@@ -4,7 +4,7 @@ from autoresirch.prepare.architecture_loading import (
     validate_architecture_spec,
     validate_train_source,
 )
-from autoresirch.prepare.dataset_preparation import (
+from autoresirch.prepare.standard.dataset import (
     build_prepared_dataset_from_frame,
     build_sequence_feature_frame,
     choose_cv_genes,
@@ -16,8 +16,8 @@ from autoresirch.prepare.dataset_preparation import (
     print_dataset_summary,
     read_raw_dataframe,
 )
-from autoresirch.prepare.fold_preprocessor import FoldPreprocessor, TargetScaler, build_cv_folds
-from autoresirch.prepare.training_harness import (
+from autoresirch.prepare.standard.preprocessing import FoldPreprocessor, TargetScaler, build_cv_folds
+from autoresirch.prepare.standard.training import (
     _is_defined,
     _pick_fold_by_metric,
     _train_epoch,

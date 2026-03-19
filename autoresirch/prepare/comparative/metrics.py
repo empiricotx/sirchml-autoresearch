@@ -4,8 +4,8 @@ import math
 
 import numpy as np
 
-from autoresirch.prepare.schemas import FoldDiagnostics, METRIC_CONFIG, MetricConfig, RegressionMetrics
-from autoresirch.prepare.utils import (
+from autoresirch.prepare.shared.schemas import FoldDiagnostics, METRIC_CONFIG, MetricConfig, RegressionMetrics
+from autoresirch.prepare.shared.utils import (
     mae,
     pearson_r_score,
     r2_score,

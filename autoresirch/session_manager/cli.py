@@ -6,16 +6,16 @@ from dataclasses import asdict
 from typing import Sequence
 
 from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG
-from autoresirch.prepare.utils import resolve_primary_metric_name
-from autoresirch.session_manager.analysis import record_agent_analysis
-from autoresirch.session_manager.orchestration import (
+from autoresirch.prepare.shared.utils import resolve_primary_metric_name
+from autoresirch.session_manager.shared.analysis import record_agent_analysis
+from autoresirch.session_manager.shared.orchestration import (
     create_session,
     finalize_session,
     run_session_experiment,
     sync_train_to_incumbent,
 )
 from autoresirch.session_manager.schemas import RunIntent
-from autoresirch.session_manager.storage import load_session_state
+from autoresirch.session_manager.shared.storage import load_session_state
 
 
 def _build_parser() -> argparse.ArgumentParser:

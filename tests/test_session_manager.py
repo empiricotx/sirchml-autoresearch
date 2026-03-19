@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 
 import session_manager
+from autoresirch.session_manager.shared import orchestration as session_orchestration_module
+from autoresirch.session_manager.shared import storage as session_storage_module
 from prepare import ExperimentSummary
 
 
@@ -20,12 +22,18 @@ def session_env(tmp_path: Path, monkeypatch):
     program_path.write_text("# Program\n", encoding="utf-8")
 
     monkeypatch.setattr(session_manager, "SESSIONS_DIR", tmp_path / "sessions")
+    monkeypatch.setattr(session_storage_module, "SESSIONS_DIR", tmp_path / "sessions")
     monkeypatch.setattr(session_manager, "EDITABLE_TRAIN_FILE", train_path)
+    monkeypatch.setattr(session_storage_module, "EDITABLE_TRAIN_FILE", train_path)
+    monkeypatch.setattr(session_orchestration_module, "EDITABLE_TRAIN_FILE", train_path)
     monkeypatch.setattr(session_manager, "PROGRAM_FILE", program_path)
+    monkeypatch.setattr(session_storage_module, "PROGRAM_FILE", program_path)
+    monkeypatch.setattr(session_orchestration_module, "PROGRAM_FILE", program_path)
     monkeypatch.setattr(session_manager, "RUN_LOG", run_log_path)
-    monkeypatch.setattr(session_manager, "_collect_git_metadata", lambda: ("abc123", "main", False))
+    monkeypatch.setattr(session_orchestration_module, "RUN_LOG", run_log_path)
+    monkeypatch.setattr(session_storage_module, "_collect_git_metadata", lambda: ("abc123", "main", False))
     monkeypatch.setattr(
-        session_manager,
+        session_storage_module,
         "_load_architecture_metadata",
         lambda: (
             "arch123",
@@ -39,6 +47,8 @@ def session_env(tmp_path: Path, monkeypatch):
             },
         ),
     )
+    monkeypatch.setattr(session_orchestration_module, "_session_manager_package", lambda: session_manager)
+    monkeypatch.setattr(session_storage_module, "_session_manager_package", lambda: session_manager)
     return {
         "tmp_path": tmp_path,
         "train_path": train_path,

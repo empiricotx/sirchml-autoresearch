@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from autoresirch.prepare.comparative.metrics import comparative_class_labels
-from autoresirch.prepare.schemas import (
+from autoresirch.prepare.shared.schemas import (
     DATASET_CONFIG,
     METRIC_CONFIG,
     SPLIT_CONFIG,
@@ -108,7 +108,7 @@ def build_comparative_prepared_dataset_from_frame(
     split_config: SplitConfig = SPLIT_CONFIG,
     metric_config: MetricConfig = METRIC_CONFIG,
 ) -> PreparedDataset:
-    from autoresirch.prepare.dataset_preparation import build_prepared_dataset_from_frame
+    from autoresirch.prepare.standard.dataset import build_prepared_dataset_from_frame
 
     sequence_dataset_config = DatasetConfig(
         raw_data_path=dataset_config.raw_data_path,

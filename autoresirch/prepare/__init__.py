@@ -5,33 +5,8 @@ from .architecture_loading import (
     validate_architecture_spec,
     validate_train_source,
 )
-from .dataset_preparation import (
-    build_prepared_dataset_from_frame,
-    build_sequence_feature_frame,
-    choose_cv_genes,
-    choose_test_genes,
-    infer_feature_columns,
-    normalize_gene_label,
-    normalize_sequence,
-    prepare_dataset,
-    print_dataset_summary,
-    read_raw_dataframe,
-)
-from .comparative import (
-    COMPARATIVE_CLASS_VALUES,
-    aggregate_comparative_fold_results,
-    build_comparative_fold_diagnostics,
-    build_comparative_prepared_dataset,
-    build_comparative_prepared_dataset_from_frame,
-    build_comparative_run_diagnostics,
-    comparative_class_labels,
-    evaluate_comparative_predictions,
-    train_comparative_final_holdout,
-    train_comparative_fold,
-)
-from .fold_preprocessor import FoldPreprocessor, TargetScaler, build_cv_folds
-from .orchestration import print_experiment_summary, run_experiment, save_run_summary
-from .schemas import (
+from .shared.orchestration import print_experiment_summary, run_experiment, save_run_summary
+from .shared.schemas import (
     ALLOWED_TRAIN_IMPORTS,
     ARCHITECTURE_CONSTRAINTS,
     CACHE_DIR,
@@ -64,20 +39,7 @@ from .schemas import (
     TrainingConfig,
     ExperimentMode,
 )
-from .training_harness import (
-    _is_defined,
-    _pick_fold_by_metric,
-    _train_epoch,
-    aggregate_fold_results,
-    build_run_diagnostics,
-    create_dataloader,
-    instantiate_model,
-    predict_regression,
-    train_final_holdout,
-    train_fold,
-    validate_budget,
-)
-from .utils import (
+from .shared.utils import (
     _config_fingerprint,
     _json_default,
     _make_run_dir,
@@ -92,12 +54,50 @@ from .utils import (
     mae,
     pearson_r_score,
     r2_score,
+    resolve_primary_metric_name,
     rmse,
     roc_auc_score_binary,
     scale_regression_predictions,
     set_random_seed,
     spearman_r_score,
-    resolve_primary_metric_name,
+)
+from .standard.dataset import (
+    build_prepared_dataset_from_frame,
+    build_sequence_feature_frame,
+    choose_cv_genes,
+    choose_test_genes,
+    infer_feature_columns,
+    normalize_gene_label,
+    normalize_sequence,
+    prepare_dataset,
+    print_dataset_summary,
+    read_raw_dataframe,
+)
+from .comparative import (
+    COMPARATIVE_CLASS_VALUES,
+    aggregate_comparative_fold_results,
+    build_comparative_fold_diagnostics,
+    build_comparative_prepared_dataset,
+    build_comparative_prepared_dataset_from_frame,
+    build_comparative_run_diagnostics,
+    comparative_class_labels,
+    evaluate_comparative_predictions,
+    train_comparative_final_holdout,
+    train_comparative_fold,
+)
+from .standard.preprocessing import FoldPreprocessor, TargetScaler, build_cv_folds
+from .standard.training import (
+    _is_defined,
+    _pick_fold_by_metric,
+    _train_epoch,
+    aggregate_fold_results,
+    build_run_diagnostics,
+    create_dataloader,
+    instantiate_model,
+    predict_regression,
+    train_final_holdout,
+    train_fold,
+    validate_budget,
 )
 
 

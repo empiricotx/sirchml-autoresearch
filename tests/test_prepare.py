@@ -11,8 +11,8 @@ from torch import nn
 
 import autoresirch.prepare as prepare_package
 import prepare as prepare_module
-from autoresirch.prepare import orchestration as orchestration_module
-from autoresirch.prepare import training_harness as training_harness_module
+from autoresirch.prepare.shared import orchestration as orchestration_module
+from autoresirch.prepare.standard import training as training_harness_module
 from prepare import (
     ArchitectureSpec,
     ArchitectureContext,

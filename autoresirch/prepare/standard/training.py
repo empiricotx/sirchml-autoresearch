@@ -10,9 +10,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from .architecture_loading import validate_architecture_spec
-from .fold_preprocessor import FoldPreprocessor, TargetScaler
-from .schemas import (
+from autoresirch.prepare.architecture_loading import validate_architecture_spec
+from autoresirch.prepare.shared.schemas import (
     ARCHITECTURE_CONSTRAINTS,
     METRIC_CONFIG,
     TRAINING_CONFIG,
@@ -28,7 +27,7 @@ from .schemas import (
     RegressionMetrics,
     TrainingConfig,
 )
-from .utils import (
+from autoresirch.prepare.shared.utils import (
     _normalize_model_output,
     _state_dict_to_cpu,
     build_fold_diagnostics,
@@ -36,6 +35,7 @@ from .utils import (
     evaluate_predictions,
     set_random_seed,
 )
+from autoresirch.prepare.standard.preprocessing import FoldPreprocessor, TargetScaler
 
 
 BatchPayload = dict[str, torch.Tensor]

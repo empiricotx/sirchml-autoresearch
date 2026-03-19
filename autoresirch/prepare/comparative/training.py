@@ -11,7 +11,7 @@ from autoresirch.prepare.comparative.metrics import (
     build_comparative_fold_diagnostics,
     evaluate_comparative_predictions,
 )
-from autoresirch.prepare.schemas import (
+from autoresirch.prepare.shared.schemas import (
     ARCHITECTURE_CONSTRAINTS,
     METRIC_CONFIG,
     TRAINING_CONFIG,
@@ -25,7 +25,7 @@ from autoresirch.prepare.schemas import (
     RegressionMetrics,
     TrainingConfig,
 )
-from autoresirch.prepare.training_harness import (
+from autoresirch.prepare.standard.training import (
     _build_context,
     _fit_flat_preprocessor,
     _is_defined,
@@ -38,7 +38,7 @@ from autoresirch.prepare.training_harness import (
     predict_regression,
     validate_budget,
 )
-from autoresirch.prepare.utils import set_random_seed
+from autoresirch.prepare.shared.utils import set_random_seed
 
 
 def _validate_comparative_architecture(architecture: ArchitectureSpec) -> None:
@@ -74,7 +74,7 @@ def train_comparative_fold(
         fold.val_indices,
     )
 
-    from autoresirch.prepare.fold_preprocessor import TargetScaler
+    from autoresirch.prepare.standard.preprocessing import TargetScaler
 
     target_scaler = TargetScaler.fit(train_target)
     train_target_scaled = target_scaler.transform(train_target)
@@ -195,7 +195,7 @@ def train_comparative_final_holdout(
         train_indices,
         test_indices,
     )
-    from autoresirch.prepare.fold_preprocessor import TargetScaler
+    from autoresirch.prepare.standard.preprocessing import TargetScaler
 
     target_scaler = TargetScaler.fit(train_target)
     train_target_scaled = target_scaler.transform(train_target)

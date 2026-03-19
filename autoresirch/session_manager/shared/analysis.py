@@ -35,7 +35,7 @@ from autoresirch.session_manager.schemas import (
     SessionState,
     SessionSummaryRecord,
 )
-from autoresirch.session_manager.storage import (
+from autoresirch.session_manager.shared.storage import (
     _agent_analysis_path,
     _analysis_input_path,
     _load_run_summary,

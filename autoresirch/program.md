@@ -1,37 +1,43 @@
-# Regression Autoresearch Program
+# Autoresearch Program
 
-This repo is an autonomous search loop for **siRNA regression architectures**.
+This repo runs an autonomous architecture search over fixed siRNA experiment harnesses.
+
+The harness supports two experiment modes:
+
+- `standard`: sequence-level regression with binary AUC-derived reporting
+- `comparative`: within-gene pairwise regression with multiclass AUC-centered reporting
 
 ## Core Rule
 
-You may edit **only** `autoresirch/train.py` among source-code files.
+Edit only [autoresirch/train.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/train.py) among source files during a search run.
 
-You may also create and update generated artifacts under:
+You may also create or update generated artifacts under:
 
 - `sessions/`
 - `run.log`
 
 Do not modify:
 
-- `autoresirch/prepare`
-- `autoresirch/session_manager`
-- `pyproject.toml`
+- [autoresirch/prepare](/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare)
+- [autoresirch/session_manager](/Users/lucasplatter/sirchml-autoresearch/autoresirch/session_manager)
+- [pyproject.toml](/Users/lucasplatter/sirchml-autoresearch/pyproject.toml)
 - dataset files
 - tests
-- evaluation logic
-- train/test split logic
+- feature engineering
+- preprocessing
+- split logic
 - CV logic
 - optimizer settings
 - time budgets
 - metric definitions
 
-Those are fixed by the human and define the experiment boundary.
+Those define the experiment boundary.
 
-## Generated Artifact Rule
+## Generated Artifacts
 
-Do not manually edit generated session artifacts.
+Do not edit generated session artifacts by hand.
 
-These must be created or updated only through `autoresirch.session_manager`:
+Use `autoresirch.session_manager` to create or update:
 
 - `session_state.json`
 - `results.tsv`
@@ -45,20 +51,28 @@ These must be created or updated only through `autoresirch.session_manager`:
 
 ## Objective
 
-Maximize `weighted_cv_auc`.
+Optimize the run's configured primary metric:
+
+- `standard`: `weighted_cv_auc`
+- `comparative`: `weighted_cv_overall_auc`
 
 Higher is better.
 
-The metric is the weighted mean of per-gene validation AUC values, weighted by the number of evaluation sequences in each held-out gene fold.
+Do not infer the active mode. Read the current run summary, `analysis_input.json`, or active dataset/session config first.
 
 ## Session Protocol
 
-1. Read `README.md`, `autoresirch/program.md`, and `autoresirch/train.py`.
-2. Confirm the cached dataset exists. If not, tell the human to run `uv run python -m autoresirch.prepare.cli`.
+1. Read [README.md](/Users/lucasplatter/sirchml-autoresearch/README.md), [autoresirch/program.md](/Users/lucasplatter/sirchml-autoresearch/autoresirch/program.md), and [autoresirch/train.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/train.py).
+2. Confirm the cached dataset exists. If not, tell the human to run:
+
+```bash
+uv run python -m autoresirch.prepare.cli
+```
+
 3. Start a session:
 
 ```bash
-uv run python -m autoresirch.session_manager.cli start --objective "Maximize weighted_cv_auc" --initiated-by agent
+uv run python -m autoresirch.session_manager.cli start --objective "<mode-aware objective>" --initiated-by agent
 ```
 
 4. Run the unmodified baseline as the base run:
@@ -78,9 +92,8 @@ uv run python -m autoresirch.session_manager.cli run \
    - `hypothesis`
    - `mutation_summary`
    - `description`
-
-6. Edit only `autoresirch/train.py`.
-7. Run exactly one candidate at a time through `autoresirch.session_manager`:
+6. Edit only [autoresirch/train.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/train.py).
+7. Run one candidate at a time:
 
 ```bash
 uv run python -m autoresirch.session_manager.cli run \
@@ -93,44 +106,41 @@ uv run python -m autoresirch.session_manager.cli run \
   --description "<description>"
 ```
 
-8. Inspect the reported decision and the generated `analysis_input.json` for that run.
-9. Record agent analysis through `autoresirch.session_manager` before syncing the incumbent:
+8. Inspect the decision plus the generated `analysis_input.json`.
+9. Record agent analysis before syncing the incumbent:
 
 ```bash
 uv run python -m autoresirch.session_manager.cli analyze-run \
   --session-id <session_id> \
   --run-id <run_id> \
   --summary-label "<short label>" \
-  --freeform-analysis "<brief analysis that references concrete metric movement>" \
+  --freeform-analysis "<brief metric-grounded analysis>" \
   --likely-helped "<factor that may have helped>" \
-  --likely-helped "<optional second factor>" \
   --likely-hurt "<factor that may have hurt>" \
   --confidence <0.0_to_1.0> \
-  --next-step-reasoning "<1-2 concrete next-step sentences>"
+  --next-step-reasoning "<concise next-step guidance>"
 ```
 
 Rules for `analyze-run`:
 
-- do not override the AUC-only keep/discard decision
+- do not override the primary-metric keep/discard decision
 - reference concrete metric deltas from `analysis_input.json`
-- keep the free-form analysis concise
-- suggest only one or two follow-up ideas
-- do not edit `agent_analysis.json` or `synopsis.md` by hand
+- keep analysis short
+- suggest at most one or two follow-up ideas
 
-10. After recording agent analysis, restore `autoresirch/train.py` to the current incumbent:
+10. Restore [autoresirch/train.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/train.py) to the incumbent:
 
 ```bash
 uv run python -m autoresirch.session_manager.cli sync-incumbent --session-id <session_id>
 ```
 
-11. Use session status when needed:
+11. Use status when needed:
 
 ```bash
 uv run python -m autoresirch.session_manager.cli status --session-id <session_id>
 ```
 
-12. Continue until a stopping condition is met.
-13. Finalize the session:
+12. Finalize when done:
 
 ```bash
 uv run python -m autoresirch.session_manager.cli finalize \
@@ -139,24 +149,28 @@ uv run python -m autoresirch.session_manager.cli finalize \
   --end-reason "<reason>"
 ```
 
-## Allowed Architecture Changes
+## Allowed Changes
 
-Only architecture:
+Change only architecture behavior inside `build_model` and the declared architecture spec in [autoresirch/train.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/train.py).
 
-- hidden layer widths
+Allowed examples:
+
+- hidden widths
 - depth
 - residual vs plain MLP family
-- activation choice
-- normalization choice
-- dropout amount
-- module structure inside `build_model`
+- activation
+- normalization
+- dropout
+- module structure
+- valid architecture-family choices allowed by the harness
 
 ## Forbidden Changes
 
-You must not change:
+Do not change:
 
-- feature engineering
-- preprocessing
+- feature construction
+- pair generation
+- label thresholds
 - gene grouping
 - held-out folds
 - weighting logic
@@ -167,54 +181,39 @@ You must not change:
 - weight decay
 - batch size
 - time budget
-- metric definitions
-- architecture constraints in `autoresirch/prepare`
+- architecture constraints
 - generated session metadata by hand
 
-## Result Logging
+## Results and Decisions
 
-Use `sessions/<session_id>/results.tsv` as the canonical run ledger.
+`sessions/<session_id>/results.tsv` is the canonical session ledger. Never append rows manually.
 
-Never append rows manually.
+Keep a run only if its primary metric improves by more than the configured epsilon.
 
-Let `autoresirch.session_manager` append one row after each run.
+Use secondary metrics only to interpret the run and choose the next mutation.
 
-The session-local header is:
+Important:
 
-```text
-session_id	session_run_index	run_id	run_role	parent_run_id	compared_against_run_id	commit	weighted_cv_rmse_mean	cv_rmse_std	weighted_cv_auc	weighted_cv_pearson_r	weighted_cv_spearman_r	status	num_params	train_seconds	decision_baseline_value	decision_delta	hypothesis	mutation_summary	description	run_dir
-```
-
-Use status values:
-
-- `keep`
-- `discard`
-- `crash`
-
-## Decision Rule
-
-Keep the run only if `weighted_cv_auc` improves by more than the configured epsilon.
-
-Do not override the decision rule with secondary metrics.
-
-Use the secondary metrics only to interpret the result and guide the next mutation.
+- `standard` decisions are based on `weighted_cv_auc`
+- `comparative` decisions are based on `weighted_cv_overall_auc`
+- comparative class-specific AUCs may be undefined on some folds because class support can be absent
 
 ## Crash Handling
 
 If a run crashes:
 
-1. Read the generated failure artifact in the run directory.
-2. If the issue is a simple architecture bug in `autoresirch/train.py`, fix it and rerun as a new run.
-3. Let `autoresirch.session_manager` record the `crash` metadata and session-local results row.
+1. Read the generated failure artifact.
+2. If the issue is a simple architecture bug in [autoresirch/train.py](/Users/lucasplatter/sirchml-autoresearch/autoresirch/train.py), fix it and rerun as a new run.
+3. Let `autoresirch.session_manager` record the crash metadata.
 4. Run `sync-incumbent` before the next mutation.
-5. Finalize the session if crashes or instability make further search unproductive.
+5. Stop the session if crashes or instability make search unproductive.
 
 ## Simplicity Rule
 
 If two architectures perform similarly, prefer the simpler one:
 
-- fewer layers
 - fewer parameters
 - less brittle code
+- fewer moving parts
 
-If a more complex model does not clearly justify itself on `weighted_cv_auc`, keep the simpler incumbent and note the tradeoff in the session summary.
+Do not keep complexity that is not justified by the active mode's primary metric.

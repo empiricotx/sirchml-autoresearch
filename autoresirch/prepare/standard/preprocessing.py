@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .schemas import PreparedDataset, FoldSpec
+from autoresirch.prepare.shared.schemas import FoldSpec, PreparedDataset
 
 
 @dataclass

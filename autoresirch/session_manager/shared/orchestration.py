@@ -6,9 +6,9 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG, run_experiment
-from autoresirch.prepare.utils import resolve_primary_metric_name
-from autoresirch.session_manager.analysis import (
+from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG
+from autoresirch.prepare.shared.utils import resolve_primary_metric_name
+from autoresirch.session_manager.shared.analysis import (
     _build_analysis_input_record,
     _build_failure_analysis_input_record,
     _compared_summary_payload,
@@ -28,7 +28,7 @@ from autoresirch.session_manager.schemas import (
     SessionState,
     SessionSummaryRecord,
 )
-from autoresirch.session_manager.storage import (
+from autoresirch.session_manager.shared.storage import (
     _collect_git_metadata,
     _load_architecture_metadata,
     _load_run_summary,

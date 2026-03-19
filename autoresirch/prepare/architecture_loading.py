@@ -3,7 +3,7 @@ from pathlib import Path
 import ast
 import importlib.util
 from types import ModuleType
-from .schemas import ArchitectureSpec, ArchitectureConstraints, ARCHITECTURE_CONSTRAINTS, EDITABLE_TRAIN_FILE, LoadedArchitecture, ALLOWED_TRAIN_IMPORTS, FORBIDDEN_CALL_NAMES, FORBIDDEN_ATTRIBUTE_NAMES
+from autoresirch.prepare.shared.schemas import ArchitectureConstraints, ArchitectureSpec, ARCHITECTURE_CONSTRAINTS, EDITABLE_TRAIN_FILE, LoadedArchitecture, ALLOWED_TRAIN_IMPORTS, FORBIDDEN_CALL_NAMES, FORBIDDEN_ATTRIBUTE_NAMES
 
 
 TRAIN_FILE_LABEL = "autoresirch/train.py"

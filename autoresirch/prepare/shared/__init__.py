@@ -1,4 +1,4 @@
-from autoresirch.prepare.schemas import (
+from autoresirch.prepare.shared.schemas import (
     ALLOWED_TRAIN_IMPORTS,
     ARCHITECTURE_CONSTRAINTS,
     CACHE_DIR,

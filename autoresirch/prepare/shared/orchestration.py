@@ -12,10 +12,8 @@ from autoresirch.prepare.comparative import (
     train_comparative_final_holdout,
     train_comparative_fold,
 )
-from .architecture_loading import load_train_definition, validate_architecture_spec
-from .dataset_preparation import prepare_dataset
-from .fold_preprocessor import build_cv_folds
-from .schemas import (
+from autoresirch.prepare.architecture_loading import load_train_definition, validate_architecture_spec
+from autoresirch.prepare.shared.schemas import (
     ARCHITECTURE_CONSTRAINTS,
     DATASET_CONFIG,
     METRIC_CONFIG,
@@ -32,15 +30,21 @@ from .schemas import (
     SplitConfig,
     TrainingConfig,
 )
-from .training_harness import (
+from autoresirch.prepare.shared.utils import (
+    _json_default,
+    _make_run_dir,
+    ensure_runtime_dirs,
+    resolve_primary_metric_name,
+)
+from autoresirch.prepare.standard.dataset import prepare_dataset
+from autoresirch.prepare.standard.preprocessing import build_cv_folds
+from autoresirch.prepare.standard.training import (
     aggregate_fold_results,
     build_run_diagnostics,
     train_final_holdout,
     train_fold,
     validate_budget,
 )
-from .utils import _json_default, _make_run_dir, ensure_runtime_dirs, resolve_primary_metric_name
-
 
 def save_run_summary(
     summary: ExperimentSummary,

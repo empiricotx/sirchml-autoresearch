@@ -1,4 +1,4 @@
-from autoresirch.session_manager.shared.metrics import (
+from autoresirch.session_manager.standard.metrics import (
     STANDARD_ANALYSIS_INPUT_METRIC_ORDER,
     STANDARD_INTERPRETATION_METRIC_ORDER,
     STANDARD_INTERPRETATION_METRIC_SPECS,
