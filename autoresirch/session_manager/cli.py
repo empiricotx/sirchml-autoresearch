@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict
 from typing import Sequence
 
-from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG
+from autoresirch.prepare import DATASET_CONFIG, ExperimentMode, METRIC_CONFIG
 from autoresirch.prepare.shared.utils import resolve_primary_metric_name
 from autoresirch.session_manager.shared.analysis import record_agent_analysis
 from autoresirch.session_manager.shared.orchestration import (
@@ -15,7 +15,9 @@ from autoresirch.session_manager.shared.orchestration import (
     sync_train_to_incumbent,
 )
 from autoresirch.session_manager.schemas import RunIntent
-from autoresirch.session_manager.shared.storage import load_session_state
+from autoresirch.session_manager.shared.storage import load_session_context, load_session_state
+
+EXPERIMENT_MODE_CHOICES: tuple[ExperimentMode, ...] = ("standard", "comparative")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -24,11 +26,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     start_parser = subparsers.add_parser("start", help="Create a new search session.")
     start_parser.add_argument("--session-id", default=None)
-    start_parser.add_argument(
-        "--objective",
-        default=f"Maximize {resolve_primary_metric_name(DATASET_CONFIG.experiment_mode, METRIC_CONFIG)}",
-    )
+    start_parser.add_argument("--objective", default=None)
     start_parser.add_argument("--initiated-by", default="agent")
+    start_parser.add_argument(
+        "--experiment-mode",
+        choices=EXPERIMENT_MODE_CHOICES,
+        default=DATASET_CONFIG.experiment_mode,
+    )
 
     run_parser = subparsers.add_parser("run", help="Execute one run inside an existing session.")
     run_parser.add_argument("--session-id", required=True)
@@ -75,10 +79,14 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "start":
+        objective = args.objective
+        if objective is None:
+            objective = f"Maximize {resolve_primary_metric_name(args.experiment_mode, METRIC_CONFIG)}"
         context = create_session(
             session_id=args.session_id,
-            objective=args.objective,
+            objective=objective,
             initiated_by=args.initiated_by,
+            experiment_mode=args.experiment_mode,
         )
         print(context.session_id)
         return 0
@@ -118,10 +126,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "status":
+        context = load_session_context(args.session_id)
         state = load_session_state(args.session_id)
         payload = {
             "session_id": state.session_id,
             "status": state.status,
+            "experiment_mode": context.experiment_mode,
             "latest_run_id": state.latest_run_id,
             "incumbent_run_id": state.incumbent_run_id,
             "incumbent_primary_metric_value": state.incumbent_primary_metric_value,

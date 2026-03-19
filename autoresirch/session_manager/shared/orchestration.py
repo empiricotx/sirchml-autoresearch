@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import traceback
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -180,11 +181,12 @@ def _success_decision_record(
 
 
 def _crash_decision_record(run_context: RunContext, state: SessionState) -> DecisionRecord:
+    context = load_session_context(run_context.session_id)
     return DecisionRecord(
         session_id=run_context.session_id,
         run_id=run_context.run_id,
         decision_status="crash",
-        decision_metric_name=resolve_primary_metric_name(DATASET_CONFIG.experiment_mode, METRIC_CONFIG),
+        decision_metric_name=resolve_primary_metric_name(context.experiment_mode, METRIC_CONFIG),
         decision_metric_value=None,
         decision_baseline_run_id=state.incumbent_run_id,
         decision_baseline_value=state.incumbent_primary_metric_value,
@@ -340,7 +342,10 @@ def run_session_experiment(intent: RunIntent) -> DecisionRecord:
 
     started_at = datetime.fromisoformat(run_context.started_at)
     try:
-        summary = _session_manager_package().run_experiment(run_dir=run_dir)
+        summary = _session_manager_package().run_experiment(
+            dataset_config=replace(DATASET_CONFIG, experiment_mode=context.experiment_mode),
+            run_dir=run_dir,
+        )
     except Exception as exc:
         completed_at = _utc_now_iso()
         run_context.completed_at = completed_at

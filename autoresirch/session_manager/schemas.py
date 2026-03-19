@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from autoresirch.prepare import ExperimentMode
+
 
 @dataclass(frozen=True)
 class SessionContext:
@@ -11,6 +13,7 @@ class SessionContext:
     started_at: str
     objective: str
     initiated_by: str
+    experiment_mode: ExperimentMode
     dataset_config_fingerprint: str
     split_config_fingerprint: str
     training_config_fingerprint: str
@@ -197,4 +200,3 @@ class MetricDeltaView:
     delta_vs_base: float | None
     compared_label: str
     base_label: str
-

@@ -10,6 +10,7 @@ import pytest
 import session_manager
 from autoresirch.session_manager.shared import orchestration as session_orchestration_module
 from autoresirch.session_manager.shared import storage as session_storage_module
+from autoresirch.prepare import DatasetConfig
 from prepare import ExperimentSummary
 
 
@@ -175,18 +176,24 @@ def _fake_run_experiment_factory(outcomes: list[float | Exception | dict[str, An
     return fake_run_experiment
 
 
-def _start_session(session_id: str) -> None:
-    assert session_manager.main(
-        [
-            "start",
-            "--session-id",
-            session_id,
-            "--objective",
-            "Maximize weighted_cv_auc",
-            "--initiated-by",
-            "agent",
-        ]
-    ) == 0
+def _start_session(
+    session_id: str,
+    *,
+    experiment_mode: str = "standard",
+    objective: str | None = None,
+) -> None:
+    argv = [
+        "start",
+        "--session-id",
+        session_id,
+        "--initiated-by",
+        "agent",
+        "--experiment-mode",
+        experiment_mode,
+    ]
+    if objective is not None:
+        argv.extend(["--objective", objective])
+    assert session_manager.main(argv) == 0
 
 
 def _run_base(session_id: str) -> int:
@@ -240,6 +247,16 @@ def test_start_creates_session_artifacts(session_env) -> None:
     assert session_dir.joinpath("results.tsv").exists()
     assert session_dir.joinpath("session_context.json").exists()
     assert session_dir.joinpath("session_state.json").exists()
+
+
+def test_start_persists_comparative_experiment_mode(session_env) -> None:
+    session_id = "session-mode-001"
+    _start_session(session_id, experiment_mode="comparative")
+
+    context = session_manager.load_session_context(session_id)
+
+    assert context.experiment_mode == "comparative"
+    assert context.objective == "Maximize weighted_cv_overall_auc"
 
 
 def test_base_run_creates_expected_artifacts(session_env, monkeypatch) -> None:
@@ -679,7 +696,7 @@ def test_finalize_handles_hybrid_runs_with_empty_hidden_dims(session_env, monkey
 
 def test_candidate_run_comparative_analysis_includes_class_support(session_env, monkeypatch) -> None:
     session_id = "session-comparative-001"
-    _start_session(session_id)
+    _start_session(session_id, experiment_mode="comparative")
     monkeypatch.setattr(
         session_manager,
         "run_experiment",
@@ -757,3 +774,29 @@ def test_candidate_run_comparative_analysis_includes_class_support(session_env, 
     assert analysis_input["diagnostics"]["undefined_metric_counts"]["auc_class_0"] == 1
     assert analysis_input["diagnostics"]["class_support"]["folds_missing_0"] == 1
     assert "Comparative class support" in synopsis
+
+
+def test_comparative_session_passes_mode_specific_dataset_config(session_env, monkeypatch) -> None:
+    session_id = "session-comparative-002"
+    _start_session(session_id, experiment_mode="comparative")
+    captured_dataset_configs: list[DatasetConfig] = []
+
+    def fake_run_experiment(*, dataset_config=None, run_dir=None, latest_summary_path=None, **kwargs):
+        assert dataset_config is not None
+        captured_dataset_configs.append(dataset_config)
+        return _fake_run_experiment_factory(
+            [
+                {
+                    "metric_value": 0.70,
+                    "experiment_mode": "comparative",
+                    "weighted_cv_overall_auc": 0.70,
+                }
+            ]
+        )(dataset_config=dataset_config, run_dir=run_dir, latest_summary_path=latest_summary_path, **kwargs)
+
+    monkeypatch.setattr(session_manager, "run_experiment", fake_run_experiment)
+
+    assert _run_base(session_id) == 0
+
+    assert captured_dataset_configs
+    assert captured_dataset_configs[0].experiment_mode == "comparative"

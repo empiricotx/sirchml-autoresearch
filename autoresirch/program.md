@@ -58,7 +58,7 @@ Optimize the run's configured primary metric:
 
 Higher is better.
 
-Do not infer the active mode. Read the current run summary, `analysis_input.json`, or active dataset/session config first.
+Do not infer the active mode. Read the current run summary, `analysis_input.json`, or `session_context.json` first.
 
 ## Session Protocol
 
@@ -72,8 +72,12 @@ uv run python -m autoresirch.prepare.cli
 3. Start a session:
 
 ```bash
-uv run python -m autoresirch.session_manager.cli start --objective "<mode-aware objective>" --initiated-by agent
+uv run python -m autoresirch.session_manager.cli start \
+  --experiment-mode <standard|comparative> \
+  --initiated-by agent
 ```
+
+The session manager stores this mode in `session_context.json`. All runs in the session must use that stored mode.
 
 4. Run the unmodified baseline as the base run:
 
@@ -139,6 +143,8 @@ uv run python -m autoresirch.session_manager.cli sync-incumbent --session-id <se
 ```bash
 uv run python -m autoresirch.session_manager.cli status --session-id <session_id>
 ```
+
+`status` reports the persisted session `experiment_mode`.
 
 12. Finalize when done:
 

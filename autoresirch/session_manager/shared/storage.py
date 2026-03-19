@@ -11,6 +11,7 @@ from typing import Any
 from autoresirch.prepare import (
     ARCHITECTURE_CONSTRAINTS,
     DATASET_CONFIG,
+    ExperimentMode,
     METRIC_CONFIG,
     SPLIT_CONFIG,
     TRAINING_CONFIG,
@@ -176,6 +177,7 @@ def create_session(
     session_id: str | None,
     objective: str,
     initiated_by: str,
+    experiment_mode: ExperimentMode,
 ) -> SessionContext:
     resolved_session_id = session_id or _generate_session_id()
     session_dir = _session_dir(resolved_session_id)
@@ -194,6 +196,7 @@ def create_session(
         started_at=_utc_now_iso(),
         objective=objective,
         initiated_by=initiated_by,
+        experiment_mode=experiment_mode,
         program_md_sha256=_sha256_path(_session_manager_package().PROGRAM_FILE),
         **config_fingerprints,
     )
