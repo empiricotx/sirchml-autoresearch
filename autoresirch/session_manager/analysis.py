@@ -15,13 +15,16 @@ from autoresirch.session_manager.constants import (
     AGENT_ANALYSIS_MAX_NEXT_STEP_WORDS,
     AGENT_ANALYSIS_MAX_WORDS,
     AGENT_ANALYSIS_MIN_WORDS,
-    ANALYSIS_INPUT_METRIC_ORDER,
     ANALYSIS_SCHEMA_VERSION,
     INTERPRETATION_AUC_SPAN_DELTA,
-    INTERPRETATION_METRIC_ORDER,
-    INTERPRETATION_METRIC_SPECS,
     INTERPRETATION_NEAR_MISS_AUC_DELTA,
     INTERPRETATION_RMSE_SPAN_DELTA,
+)
+from autoresirch.session_manager.shared.metrics import (
+    analysis_input_metric_order_for_mode,
+    interpretation_metric_order_for_mode,
+    interpretation_metric_specs_for_mode,
+    primary_metric_name_for_mode,
 )
 from autoresirch.session_manager.schemas import (
     AgentAnalysisRecord,
@@ -131,14 +134,19 @@ def _summary_metric_value(
 ) -> float | int | None:
     if summary is None:
         return None
-    metric_spec = INTERPRETATION_METRIC_SPECS[metric_name]
+    metric_spec = interpretation_metric_specs_for_mode(summary.experiment_mode)[metric_name]
     return getattr(summary, metric_spec.summary_attr)
 
 
-def _classify_metric_direction(metric_name: str, delta: float | None) -> str:
+def _classify_metric_direction(
+    metric_name: str,
+    delta: float | None,
+    *,
+    experiment_mode: str,
+) -> str:
     if not _is_defined_number(delta):
         return "undefined"
-    metric_spec = INTERPRETATION_METRIC_SPECS[metric_name]
+    metric_spec = interpretation_metric_specs_for_mode(experiment_mode)[metric_name]
     if float(delta) > metric_spec.flat_threshold:
         return "better" if metric_spec.direction == "higher" else "worse"
     if float(delta) < -metric_spec.flat_threshold:
@@ -151,10 +159,13 @@ def _build_metric_delta_bundle(
     compared_summary: ExperimentSummary | None,
     base_summary: ExperimentSummary | None,
     *,
-    metric_names: Sequence[str] = INTERPRETATION_METRIC_ORDER,
+    metric_names: Sequence[str] | None = None,
 ) -> dict[str, MetricDeltaView]:
+    resolved_metric_names = metric_names or interpretation_metric_order_for_mode(
+        current_summary.experiment_mode
+    )
     metric_bundle: dict[str, MetricDeltaView] = {}
-    for metric_name in metric_names:
+    for metric_name in resolved_metric_names:
         current_value = _summary_metric_value(current_summary, metric_name)
         compared_value = _summary_metric_value(compared_summary, metric_name)
         base_value = _summary_metric_value(base_summary, metric_name)
@@ -171,14 +182,26 @@ def _build_metric_delta_bundle(
             current_value=current_value,
             delta_vs_compared=delta_vs_compared,
             delta_vs_base=delta_vs_base,
-            compared_label=_classify_metric_direction(metric_name, delta_vs_compared),
-            base_label=_classify_metric_direction(metric_name, delta_vs_base),
+            compared_label=_classify_metric_direction(
+                metric_name,
+                delta_vs_compared,
+                experiment_mode=current_summary.experiment_mode,
+            ),
+            base_label=_classify_metric_direction(
+                metric_name,
+                delta_vs_base,
+                experiment_mode=current_summary.experiment_mode,
+            ),
         )
     return metric_bundle
 
 
-def _format_metric_movement_line(metric_movement: MetricDeltaView) -> str:
-    metric_spec = INTERPRETATION_METRIC_SPECS[metric_movement.metric_name]
+def _format_metric_movement_line(
+    metric_movement: MetricDeltaView,
+    *,
+    experiment_mode: str,
+) -> str:
+    metric_spec = interpretation_metric_specs_for_mode(experiment_mode)[metric_movement.metric_name]
     return (
         f"- {metric_spec.display_name}: "
         f"`{_format_metric_value(metric_movement.metric_name, metric_movement.current_value)}`"
@@ -194,12 +217,13 @@ def _format_metric_movement_line(metric_movement: MetricDeltaView) -> str:
 def _metric_view_payload(
     metric_bundle: dict[str, MetricDeltaView],
     *,
+    experiment_mode: str,
     compared_summary: ExperimentSummary | None,
     base_summary: ExperimentSummary | None,
 ) -> dict[str, dict[str, Any]]:
     payload: dict[str, dict[str, Any]] = {}
     for metric_name, metric_view in metric_bundle.items():
-        metric_spec = INTERPRETATION_METRIC_SPECS[metric_name]
+        metric_spec = interpretation_metric_specs_for_mode(experiment_mode)[metric_name]
         payload[metric_name] = {
             "display_name": metric_spec.display_name,
             "direction": metric_spec.direction,
@@ -222,10 +246,12 @@ def _analysis_diagnostics_payload(
     return {
         "fold_count": diagnostics.get("fold_count"),
         "nan_metric_counts": diagnostics.get("nan_metric_counts"),
+        "undefined_metric_counts": diagnostics.get("undefined_metric_counts"),
         "best_auc_fold": diagnostics.get("best_auc_fold"),
         "worst_auc_fold": diagnostics.get("worst_auc_fold"),
         "best_rmse_fold": diagnostics.get("best_rmse_fold"),
         "worst_rmse_fold": diagnostics.get("worst_rmse_fold"),
+        "class_support": diagnostics.get("class_support"),
     }
 
 
@@ -298,7 +324,7 @@ def _fold_metric_span(
 
 
 def _summary_secondary_metrics(summary: ExperimentSummary) -> dict[str, float | None]:
-    return {
+    secondary_metrics = {
         "weighted_cv_rmse_mean": summary.weighted_cv_rmse_mean,
         "weighted_cv_mae_mean": summary.weighted_cv_mae_mean,
         "weighted_cv_r2_mean": summary.weighted_cv_r2_mean,
@@ -306,15 +332,27 @@ def _summary_secondary_metrics(summary: ExperimentSummary) -> dict[str, float | 
         "weighted_cv_spearman_r_mean": summary.weighted_cv_spearman_r_mean,
         "pooled_cv_rmse": summary.pooled_cv_rmse,
     }
+    if summary.experiment_mode == "comparative":
+        secondary_metrics.update(
+            {
+                "weighted_cv_auc_pos_vs_neg": summary.weighted_cv_auc_pos_vs_neg,
+                "weighted_cv_auc_class_neg1": summary.weighted_cv_auc_class_neg1,
+                "weighted_cv_auc_class_0": summary.weighted_cv_auc_class_0,
+                "weighted_cv_auc_class_pos1": summary.weighted_cv_auc_class_pos1,
+            }
+        )
+    return secondary_metrics
 
 
 def _is_near_miss_discard(
     decision: DecisionRecord,
     metric_bundle: dict[str, MetricDeltaView],
+    *,
+    experiment_mode: str,
 ) -> bool:
     if decision.decision_status != "discard":
         return False
-    auc_delta = metric_bundle["weighted_cv_auc"].delta_vs_compared
+    auc_delta = metric_bundle[primary_metric_name_for_mode(experiment_mode)].delta_vs_compared
     if not _is_defined_number(auc_delta):
         return False
     if float(auc_delta) >= 0:
@@ -346,12 +384,16 @@ def _classify_hypothesis_result(
         return "supported"
 
     metric_bundle = _build_metric_delta_bundle(current_summary, compared_summary, None)
-    auc_label = metric_bundle["weighted_cv_auc"].compared_label
+    auc_label = metric_bundle[primary_metric_name_for_mode(current_summary.experiment_mode)].compared_label
     rmse_label = metric_bundle["weighted_cv_rmse_mean"].compared_label
     pearson_label = metric_bundle["weighted_cv_pearson_r_mean"].compared_label
     spearman_label = metric_bundle["weighted_cv_spearman_r_mean"].compared_label
 
-    if _is_near_miss_discard(decision, metric_bundle):
+    if _is_near_miss_discard(
+        decision,
+        metric_bundle,
+        experiment_mode=current_summary.experiment_mode,
+    ):
         return "partially_supported"
     if auc_label in {"worse", "flat"} and rmse_label == "better":
         return "partially_supported"
@@ -398,6 +440,7 @@ def _build_robustness_interpretation(
     metric_bundle: dict[str, MetricDeltaView],
     current_diagnostics: dict[str, Any] | None,
     compared_diagnostics: dict[str, Any] | None,
+    experiment_mode: str,
 ) -> tuple[list[str], bool]:
     current_auc_nan = _diagnostic_metric_count(current_diagnostics, "auc")
     current_pearson_nan = _diagnostic_metric_count(current_diagnostics, "pearson_r")
@@ -415,13 +458,13 @@ def _build_robustness_interpretation(
         current_diagnostics,
         best_key="best_auc_fold",
         worst_key="worst_auc_fold",
-        metric_name="auc",
+        metric_name="overall_auc" if experiment_mode == "comparative" else "auc",
     )
     compared_auc_span = _fold_metric_span(
         compared_diagnostics,
         best_key="best_auc_fold",
         worst_key="worst_auc_fold",
-        metric_name="auc",
+        metric_name="overall_auc" if experiment_mode == "comparative" else "auc",
     )
     rmse_span = _fold_metric_span(
         current_diagnostics,
@@ -482,11 +525,12 @@ def _build_next_run_implication(
     decision: DecisionRecord,
     metric_bundle: dict[str, MetricDeltaView],
     robustness_concern: bool,
+    experiment_mode: str,
 ) -> str:
     if decision.decision_baseline_run_id is None:
         return "use this run as the session reference point and perturb only one architectural axis next."
 
-    auc_label = metric_bundle["weighted_cv_auc"].compared_label
+    auc_label = metric_bundle[primary_metric_name_for_mode(experiment_mode)].compared_label
     rmse_label = metric_bundle["weighted_cv_rmse_mean"].compared_label
     pearson_label = metric_bundle["weighted_cv_pearson_r_mean"].compared_label
     spearman_label = metric_bundle["weighted_cv_spearman_r_mean"].compared_label
@@ -516,8 +560,10 @@ def _build_interpretation_bullets(
     metric_bundle: dict[str, MetricDeltaView],
     current_diagnostics: dict[str, Any] | None,
     compared_diagnostics: dict[str, Any] | None,
+    experiment_mode: str,
 ) -> list[str]:
-    auc_movement = metric_bundle["weighted_cv_auc"]
+    primary_metric_name = primary_metric_name_for_mode(experiment_mode)
+    auc_movement = metric_bundle[primary_metric_name]
     rmse_movement = metric_bundle["weighted_cv_rmse_mean"]
     pearson_movement = metric_bundle["weighted_cv_pearson_r_mean"]
     spearman_movement = metric_bundle["weighted_cv_spearman_r_mean"]
@@ -536,7 +582,11 @@ def _build_interpretation_bullets(
         decision_line = "- Decision interpretation: this run crashed before a valid summary was produced."
 
     lines = [decision_line]
-    near_miss = _is_near_miss_discard(decision, metric_bundle)
+    near_miss = _is_near_miss_discard(
+        decision,
+        metric_bundle,
+        experiment_mode=experiment_mode,
+    )
     if decision.decision_baseline_run_id is None:
         lines[0] = "- Decision interpretation: this base run established the first incumbent and the initial session reference point."
         lines.append(
@@ -545,7 +595,7 @@ def _build_interpretation_bullets(
     elif decision.decision_status == "keep":
         if rmse_movement.compared_label == "worse":
             lines.append(
-                "- Metric tradeoff: this was a `brittle gain`; `weighted_cv_auc` improved while `weighted_cv_rmse_mean` worsened."
+                f"- Metric tradeoff: this was a `brittle gain`; `{primary_metric_name}` improved while `weighted_cv_rmse_mean` worsened."
             )
             lines.append(
                 "- Metric tradeoff: this looks like a `threshold-separation gain` rather than a broad regression improvement."
@@ -562,7 +612,7 @@ def _build_interpretation_bullets(
             for movement in (rmse_movement, pearson_movement, spearman_movement)
         ) >= 2:
             lines.append(
-                "- Metric tradeoff: this was a `broader-based gain`; `weighted_cv_auc` improved alongside multiple secondary metrics."
+                f"- Metric tradeoff: this was a `broader-based gain`; `{primary_metric_name}` improved alongside multiple secondary metrics."
             )
         else:
             lines.append(
@@ -570,7 +620,7 @@ def _build_interpretation_bullets(
             )
     elif near_miss:
         lines.append(
-            "- Metric tradeoff: this was a `near miss` and a `mixed signal`; `weighted_cv_auc` declined only slightly while multiple secondary metrics improved."
+            f"- Metric tradeoff: this was a `near miss` and a `mixed signal`; `{primary_metric_name}` declined only slightly while multiple secondary metrics improved."
         )
         if (
             pearson_movement.compared_label == "better"
@@ -589,7 +639,7 @@ def _build_interpretation_bullets(
         and spearman_movement.compared_label == "better"
     ):
         lines.append(
-            "- Metric tradeoff: this was a `mixed signal`; `weighted_cv_pearson_r_mean` and `weighted_cv_spearman_r_mean` improved while `weighted_cv_auc` worsened."
+            f"- Metric tradeoff: this was a `mixed signal`; `weighted_cv_pearson_r_mean` and `weighted_cv_spearman_r_mean` improved while `{primary_metric_name}` worsened."
         )
         lines.append(
             "- Metric tradeoff: the mutation may have improved global ordering structure without improving threshold-based separation."
@@ -600,7 +650,7 @@ def _build_interpretation_bullets(
         )
         if auc_movement.compared_label == "worse":
             lines.append(
-                "- Metric tradeoff: the run fit the continuous target better but hurt `weighted_cv_auc`."
+                f"- Metric tradeoff: the run fit the continuous target better but hurt `{primary_metric_name}`."
             )
     elif auc_movement.compared_label == "worse":
         lines.append(
@@ -613,13 +663,19 @@ def _build_interpretation_bullets(
 
     if auc_movement.base_label == "better" and auc_movement.compared_label in {"worse", "flat"}:
         lines.append(
-            "- Session context: despite losing to the compared run, this candidate still outperformed the session base on `weighted_cv_auc`."
+            f"- Session context: despite losing to the compared run, this candidate still outperformed the session base on `{primary_metric_name}`."
+        )
+    undefined_metric_counts = current_diagnostics.get("undefined_metric_counts", {}) if current_diagnostics else {}
+    if experiment_mode == "comparative" and any(int(value) > 0 for value in undefined_metric_counts.values()):
+        lines.append(
+            "- Comparative class support: some AUC metrics were undefined because at least one held-out gene fold did not contain the required class support."
         )
 
     robustness_lines, robustness_concern = _build_robustness_interpretation(
         metric_bundle=metric_bundle,
         current_diagnostics=current_diagnostics,
         compared_diagnostics=compared_diagnostics,
+        experiment_mode=experiment_mode,
     )
     lines.extend(robustness_lines)
     lines.append(f"- Hypothesis assessment: `{decision.hypothesis_result or 'inconclusive'}`")
@@ -629,6 +685,7 @@ def _build_interpretation_bullets(
             decision=decision,
             metric_bundle=metric_bundle,
             robustness_concern=robustness_concern,
+            experiment_mode=experiment_mode,
         )
     )
     return lines
@@ -665,7 +722,7 @@ def _build_analysis_input_record(
         summary,
         compared_summary,
         base_summary,
-        metric_names=ANALYSIS_INPUT_METRIC_ORDER,
+        metric_names=analysis_input_metric_order_for_mode(summary.experiment_mode),
     )
     return AnalysisInputRecord(
         schema_version=ANALYSIS_SCHEMA_VERSION,
@@ -685,6 +742,7 @@ def _build_analysis_input_record(
         decision=asdict(decision),
         metrics=_metric_view_payload(
             analysis_metric_bundle,
+            experiment_mode=summary.experiment_mode,
             compared_summary=compared_summary,
             base_summary=base_summary,
         ),
@@ -694,6 +752,7 @@ def _build_analysis_input_record(
             metric_bundle=interpretation_metric_bundle,
             current_diagnostics=diagnostics,
             compared_diagnostics=compared_diagnostics,
+            experiment_mode=summary.experiment_mode,
         ),
         failure=None,
         analysis_constraints=_analysis_constraints_payload(analysis_mode="metric_comparison"),
@@ -875,8 +934,13 @@ def write_run_synopsis(
             compared_summary,
             base_summary,
         )
-        for metric_name in INTERPRETATION_METRIC_ORDER:
-            lines.append(_format_metric_movement_line(metric_bundle[metric_name]))
+        for metric_name in interpretation_metric_order_for_mode(summary.experiment_mode):
+            lines.append(
+                _format_metric_movement_line(
+                    metric_bundle[metric_name],
+                    experiment_mode=summary.experiment_mode,
+                )
+            )
         lines.extend(
             [
                 "",
@@ -898,6 +962,7 @@ def write_run_synopsis(
                 metric_bundle=metric_bundle,
                 current_diagnostics=diagnostics,
                 compared_diagnostics=compared_diagnostics,
+                experiment_mode=summary.experiment_mode,
             )
         )
         lines.extend(["", "### Agent Analysis"])

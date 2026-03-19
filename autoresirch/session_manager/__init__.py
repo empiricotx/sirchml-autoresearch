@@ -3,6 +3,7 @@ from autoresirch.session_manager.analysis import (
     write_run_synopsis,
     write_session_summary,
 )
+from autoresirch.prepare import run_experiment
 from autoresirch.session_manager.constants import (
     AGENT_ANALYSIS_FAILURE_MIN_WORDS,
     AGENT_ANALYSIS_MAX_FACTORS,
@@ -43,6 +44,11 @@ from autoresirch.session_manager.schemas import (
     SessionSummaryRecord,
 )
 from autoresirch.session_manager.storage import (
+    _collect_git_metadata,
+    _load_architecture_metadata,
+    _session_results_path,
+    _session_summary_json_path,
+    _session_summary_md_path,
     allocate_run_dir,
     append_session_results_row,
     load_session_context,
@@ -68,6 +74,11 @@ __all__ = [
     "AGENT_ANALYSIS_MAX_NEXT_STEP_WORDS",
     "AGENT_ANALYSIS_MAX_WORDS",
     "AGENT_ANALYSIS_MIN_WORDS",
+    "_collect_git_metadata",
+    "_load_architecture_metadata",
+    "_session_results_path",
+    "_session_summary_json_path",
+    "_session_summary_md_path",
     "allocate_run_dir",
     "AnalysisInputRecord",
     "ANALYSIS_INPUT_METRIC_ORDER",
@@ -90,6 +101,7 @@ __all__ = [
     "PROGRAM_FILE",
     "record_agent_analysis",
     "REPO_ROOT",
+    "run_experiment",
     "run_session_experiment",
     "RunContext",
     "RunIntent",

@@ -5,7 +5,8 @@ import json
 from dataclasses import asdict
 from typing import Sequence
 
-from autoresirch.prepare import METRIC_CONFIG
+from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG
+from autoresirch.prepare.utils import resolve_primary_metric_name
 from autoresirch.session_manager.analysis import record_agent_analysis
 from autoresirch.session_manager.orchestration import (
     create_session,
@@ -23,7 +24,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     start_parser = subparsers.add_parser("start", help="Create a new search session.")
     start_parser.add_argument("--session-id", default=None)
-    start_parser.add_argument("--objective", default=f"Maximize {METRIC_CONFIG.primary_metric_name}")
+    start_parser.add_argument(
+        "--objective",
+        default=f"Maximize {resolve_primary_metric_name(DATASET_CONFIG.experiment_mode, METRIC_CONFIG)}",
+    )
     start_parser.add_argument("--initiated-by", default="agent")
 
     run_parser = subparsers.add_parser("run", help="Execute one run inside an existing session.")

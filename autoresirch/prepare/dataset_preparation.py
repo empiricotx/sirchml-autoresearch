@@ -19,7 +19,7 @@ from .schemas import (
     PreparedDataset,
     SplitConfig,
 )
-from .utils import _config_fingerprint, ensure_runtime_dirs
+from .utils import _config_fingerprint, ensure_runtime_dirs, resolve_primary_metric_name
 
 def read_raw_dataframe(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -206,6 +206,21 @@ def build_prepared_dataset_from_frame(
     split_config: SplitConfig = SPLIT_CONFIG,
     include_rnafm_embeddings: bool = False,
 ) -> PreparedDataset:
+    if dataset_config.experiment_mode == "comparative":
+        if include_rnafm_embeddings:
+            raise NotImplementedError(
+                "Comparative mode does not support RNA-FM sequence tensors yet."
+            )
+        from autoresirch.prepare.comparative.dataset import (
+            build_comparative_prepared_dataset_from_frame,
+        )
+
+        return build_comparative_prepared_dataset_from_frame(
+            dataframe,
+            dataset_config=dataset_config,
+            split_config=split_config,
+        )
+
     required_columns = {
         dataset_config.target_column,
         dataset_config.gene_column,
@@ -314,6 +329,7 @@ def build_prepared_dataset_from_frame(
         source_path=str(dataset_config.raw_data_path),
         sequence_feature_name=sequence_feature_name,
         sequence_feature_shape=sequence_feature_shape,
+        experiment_mode="standard",
     )
 
 
@@ -325,7 +341,9 @@ def prepare_dataset(
     include_rnafm_embeddings: bool = False,
 ) -> PreparedDataset:
     ensure_runtime_dirs()
-    artifact_suffix = "_rnafm" if include_rnafm_embeddings else ""
+    artifact_suffix = f"_{dataset_config.experiment_mode}"
+    if include_rnafm_embeddings:
+        artifact_suffix = f"{artifact_suffix}_rnafm"
     artifact_path = CACHE_DIR / f"prepared_dataset{artifact_suffix}.pkl"
     metadata_path = CACHE_DIR / f"prepared_dataset_metadata{artifact_suffix}.json"
 
@@ -378,6 +396,7 @@ def prepare_dataset(
 
 def print_dataset_summary(prepared: PreparedDataset) -> None:
     print("---")
+    print(f"experiment_mode:   {prepared.experiment_mode}")
     print(f"dataset_path:      {prepared.source_path}")
     print(f"rows:              {len(prepared.target)}")
     print(f"flat_features:     {prepared.features.shape[1]}")
@@ -390,5 +409,6 @@ def print_dataset_summary(prepared: PreparedDataset) -> None:
     print(f"cv_folds:          {len(prepared.cv_genes)}")
     print(
         "primary_metric:    "
-        f"{METRIC_CONFIG.primary_metric_name} ({METRIC_CONFIG.primary_metric_direction})"
+        f"{resolve_primary_metric_name(prepared.experiment_mode)} "
+        f"({METRIC_CONFIG.primary_metric_direction})"
     )

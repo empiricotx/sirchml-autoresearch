@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import math
 import time
 from pathlib import Path
 
+from autoresirch.prepare.comparative import (
+    aggregate_comparative_fold_results,
+    build_comparative_run_diagnostics,
+    train_comparative_final_holdout,
+    train_comparative_fold,
+)
 from .architecture_loading import load_train_definition, validate_architecture_spec
 from .dataset_preparation import prepare_dataset
 from .fold_preprocessor import build_cv_folds
@@ -33,7 +39,7 @@ from .training_harness import (
     train_fold,
     validate_budget,
 )
-from .utils import _json_default, _make_run_dir, ensure_runtime_dirs
+from .utils import _json_default, _make_run_dir, ensure_runtime_dirs, resolve_primary_metric_name
 
 
 def save_run_summary(
@@ -44,6 +50,10 @@ def save_run_summary(
     run_dir: Path,
     latest_summary_path: Path | None = None,
 ) -> None:
+    if summary.experiment_mode == "comparative":
+        diagnostics_payload = build_comparative_run_diagnostics(fold_results)
+    else:
+        diagnostics_payload = build_run_diagnostics(fold_results)
     payload = {
         "summary": asdict(summary),
         "architecture": asdict(architecture),
@@ -60,7 +70,7 @@ def save_run_summary(
             }
             for result in fold_results
         ],
-        "diagnostics": build_run_diagnostics(fold_results),
+        "diagnostics": diagnostics_payload,
         "constraints": asdict(ARCHITECTURE_CONSTRAINTS),
         "training_config": asdict(TRAINING_CONFIG),
         "dataset_config": asdict(DATASET_CONFIG),
@@ -81,6 +91,7 @@ def save_run_summary(
 
 def print_experiment_summary(summary: ExperimentSummary) -> None:
     print("---")
+    print(f"experiment_mode:     {summary.experiment_mode}")
     print(f"primary_metric_name: {summary.primary_metric_name}")
     print(f"primary_metric:      {summary.primary_metric_value:.6f}")
     print(f"weighted_cv_rmse:    {summary.weighted_cv_rmse_mean:.6f}")
@@ -91,7 +102,22 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
         print("weighted_cv_r2:      nan")
     else:
         print(f"weighted_cv_r2:      {summary.weighted_cv_r2_mean:.6f}")
-    if summary.weighted_cv_auc_mean is None:
+    if summary.experiment_mode == "comparative":
+        if summary.weighted_cv_overall_auc is None:
+            print("weighted_cv_overall_auc: nan")
+        else:
+            print(f"weighted_cv_overall_auc: {summary.weighted_cv_overall_auc:.6f}")
+        for metric_name, metric_value in (
+            ("weighted_cv_auc_class_neg1", summary.weighted_cv_auc_class_neg1),
+            ("weighted_cv_auc_class_0", summary.weighted_cv_auc_class_0),
+            ("weighted_cv_auc_class_pos1", summary.weighted_cv_auc_class_pos1),
+            ("weighted_cv_auc_pos_vs_neg", summary.weighted_cv_auc_pos_vs_neg),
+        ):
+            if metric_value is None:
+                print(f"{metric_name}: nan")
+            else:
+                print(f"{metric_name}: {metric_value:.6f}")
+    elif summary.weighted_cv_auc_mean is None:
         print("weighted_cv_auc:     nan")
     else:
         print(f"weighted_cv_auc:     {summary.weighted_cv_auc_mean:.6f}")
@@ -108,7 +134,14 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
         print("test_rmse:           nan")
         print("test_mae:            nan")
         print("test_r2:             nan")
-        print("test_auc:            nan")
+        if summary.experiment_mode == "comparative":
+            print("test_overall_auc:    nan")
+            print("test_auc_class_neg1: nan")
+            print("test_auc_class_0:    nan")
+            print("test_auc_class_pos1: nan")
+            print("test_auc_pos_vs_neg: nan")
+        else:
+            print("test_auc:            nan")
         print("test_pearson_r:      nan")
         print("test_spearman_r:     nan")
     else:
@@ -118,7 +151,19 @@ def print_experiment_summary(summary: ExperimentSummary) -> None:
             print("test_r2:             nan")
         else:
             print(f"test_r2:             {summary.test_r2:.6f}")
-        if summary.test_auc is None:
+        if summary.experiment_mode == "comparative":
+            for metric_name, metric_value in (
+                ("test_overall_auc", summary.test_overall_auc),
+                ("test_auc_class_neg1", summary.test_auc_class_neg1),
+                ("test_auc_class_0", summary.test_auc_class_0),
+                ("test_auc_class_pos1", summary.test_auc_class_pos1),
+                ("test_auc_pos_vs_neg", summary.test_auc_pos_vs_neg),
+            ):
+                if metric_value is None:
+                    print(f"{metric_name}: nan")
+                else:
+                    print(f"{metric_name}: {metric_value:.6f}")
+        elif summary.test_auc is None:
             print("test_auc:            nan")
         else:
             print(f"test_auc:            {summary.test_auc:.6f}")
@@ -160,6 +205,10 @@ def run_experiment(
         build_model = loaded.build_model
 
     validate_architecture_spec(architecture, constraints)
+    active_metric_config = metric_config
+    resolved_primary_metric_name = resolve_primary_metric_name(dataset_config.experiment_mode, metric_config)
+    if resolved_primary_metric_name != metric_config.primary_metric_name:
+        active_metric_config = replace(metric_config, primary_metric_name=resolved_primary_metric_name)
     prepared = prepare_dataset(
         dataset_config=dataset_config,
         split_config=split_config,
@@ -176,8 +225,17 @@ def run_experiment(
     fold_results: list[FoldResult] = []
     num_params: int | None = None
 
+    if prepared.experiment_mode == "comparative":
+        fold_train_fn = train_comparative_fold
+        aggregate_fn = aggregate_comparative_fold_results
+        holdout_train_fn = train_comparative_final_holdout
+    else:
+        fold_train_fn = train_fold
+        aggregate_fn = aggregate_fold_results
+        holdout_train_fn = train_final_holdout
+
     for fold_index, fold in enumerate(folds):
-        result = train_fold(
+        result = fold_train_fn(
             prepared,
             fold,
             architecture,
@@ -194,10 +252,10 @@ def run_experiment(
     if num_params is None:
         raise RuntimeError("Experiment produced no fold results.")
 
-    aggregate = aggregate_fold_results(fold_results, metric_config=metric_config)
+    aggregate = aggregate_fn(fold_results, metric_config=active_metric_config)
     holdout_metrics = None
     if training_config.evaluate_test_split and prepared.test_genes and final_budget > 0:
-        holdout_metrics = train_final_holdout(
+        holdout_metrics = holdout_train_fn(
             prepared,
             architecture,
             build_model,
@@ -215,8 +273,8 @@ def run_experiment(
     summary = ExperimentSummary(
         primary_metric_name=str(aggregate["primary_metric_name"]),
         primary_metric_value=float(aggregate["primary_metric_value"]),
-        metric_direction=metric_config.primary_metric_direction,
-        improvement_epsilon=metric_config.improvement_epsilon,
+        metric_direction=active_metric_config.primary_metric_direction,
+        improvement_epsilon=active_metric_config.improvement_epsilon,
         weighted_cv_rmse_mean=float(aggregate["weighted_cv_rmse_mean"]),
         cv_rmse_mean=float(aggregate["cv_rmse_mean"]),
         cv_rmse_std=float(aggregate["cv_rmse_std"]),
@@ -269,6 +327,67 @@ def run_experiment(
         test_genes=prepared.test_genes,
         cv_genes=prepared.cv_genes,
         run_dir=str(active_run_dir),
+        experiment_mode=prepared.experiment_mode,
+        label_threshold_lower=(
+            active_metric_config.comparative_no_effect_lower
+            if prepared.experiment_mode == "comparative"
+            else None
+        ),
+        label_threshold_upper=(
+            active_metric_config.comparative_no_effect_upper
+            if prepared.experiment_mode == "comparative"
+            else None
+        ),
+        weighted_cv_overall_auc=(
+            None
+            if aggregate.get("weighted_cv_overall_auc") is None
+            else float(aggregate["weighted_cv_overall_auc"])
+        ),
+        weighted_cv_auc_class_neg1=(
+            None
+            if aggregate.get("weighted_cv_auc_class_neg1") is None
+            else float(aggregate["weighted_cv_auc_class_neg1"])
+        ),
+        weighted_cv_auc_class_0=(
+            None
+            if aggregate.get("weighted_cv_auc_class_0") is None
+            else float(aggregate["weighted_cv_auc_class_0"])
+        ),
+        weighted_cv_auc_class_pos1=(
+            None
+            if aggregate.get("weighted_cv_auc_class_pos1") is None
+            else float(aggregate["weighted_cv_auc_class_pos1"])
+        ),
+        weighted_cv_auc_pos_vs_neg=(
+            None
+            if aggregate.get("weighted_cv_auc_pos_vs_neg") is None
+            else float(aggregate["weighted_cv_auc_pos_vs_neg"])
+        ),
+        test_overall_auc=(
+            None
+            if holdout_metrics is None or holdout_metrics.overall_auc is None
+            else float(holdout_metrics.overall_auc)
+        ),
+        test_auc_class_neg1=(
+            None
+            if holdout_metrics is None or holdout_metrics.auc_class_neg1 is None
+            else float(holdout_metrics.auc_class_neg1)
+        ),
+        test_auc_class_0=(
+            None
+            if holdout_metrics is None or holdout_metrics.auc_class_0 is None
+            else float(holdout_metrics.auc_class_0)
+        ),
+        test_auc_class_pos1=(
+            None
+            if holdout_metrics is None or holdout_metrics.auc_class_pos1 is None
+            else float(holdout_metrics.auc_class_pos1)
+        ),
+        test_auc_pos_vs_neg=(
+            None
+            if holdout_metrics is None or holdout_metrics.auc_pos_vs_neg is None
+            else float(holdout_metrics.auc_pos_vs_neg)
+        ),
     )
     save_run_summary(
         summary,

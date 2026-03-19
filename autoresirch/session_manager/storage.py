@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import subprocess
 from dataclasses import asdict
@@ -16,6 +17,13 @@ from autoresirch.prepare import (
     ExperimentSummary,
     load_train_definition,
 )
+
+
+def _session_manager_package():
+    try:
+        return importlib.import_module("session_manager")
+    except ModuleNotFoundError:
+        return importlib.import_module("autoresirch.session_manager")
 from autoresirch.session_manager.constants import (
     EDITABLE_TRAIN_FILE,
     PROGRAM_FILE,
@@ -110,7 +118,7 @@ def _load_architecture_metadata() -> tuple[str | None, dict[str, Any] | None]:
 
 
 def _session_dir(session_id: str) -> Path:
-    return SESSIONS_DIR / session_id
+    return _session_manager_package().SESSIONS_DIR / session_id
 
 
 def _session_runs_dir(session_id: str) -> Path:
@@ -174,7 +182,7 @@ def create_session(
     if session_dir.exists():
         raise ValueError(f"Session {resolved_session_id!r} already exists.")
 
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    _session_manager_package().SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     _session_runs_dir(resolved_session_id).mkdir(parents=True, exist_ok=False)
     _session_results_path(resolved_session_id).write_text(SESSION_RESULTS_HEADER, encoding="utf-8")
 
@@ -186,7 +194,7 @@ def create_session(
         started_at=_utc_now_iso(),
         objective=objective,
         initiated_by=initiated_by,
-        program_md_sha256=_sha256_path(PROGRAM_FILE),
+        program_md_sha256=_sha256_path(_session_manager_package().PROGRAM_FILE),
         **config_fingerprints,
     )
     state = SessionState(
@@ -238,7 +246,10 @@ def allocate_run_dir(
 
 def write_train_snapshot(run_dir: Path) -> Path:
     snapshot_path = run_dir / "train_snapshot.py"
-    snapshot_path.write_text(EDITABLE_TRAIN_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+    snapshot_path.write_text(
+        _session_manager_package().EDITABLE_TRAIN_FILE.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     return snapshot_path
 
 
@@ -265,9 +276,14 @@ def append_session_results_row(
             _sanitize_tsv(run_context.parent_run_id),
             _sanitize_tsv(run_context.compared_against_run_id),
             _sanitize_tsv(run_context.git_commit),
+            _sanitize_tsv(None if summary is None else summary.experiment_mode),
+            _sanitize_tsv(None if summary is None else summary.primary_metric_name),
+            _sanitize_tsv(None if summary is None else summary.primary_metric_value),
             _sanitize_tsv(None if summary is None else summary.weighted_cv_rmse_mean),
             _sanitize_tsv(None if summary is None else summary.cv_rmse_std),
-            _sanitize_tsv(None if summary is None else summary.primary_metric_value),
+            _sanitize_tsv(None if summary is None else summary.weighted_cv_auc_mean),
+            _sanitize_tsv(None if summary is None else summary.weighted_cv_overall_auc),
+            _sanitize_tsv(None if summary is None else summary.weighted_cv_auc_pos_vs_neg),
             _sanitize_tsv(None if summary is None else summary.weighted_cv_pearson_r_mean),
             _sanitize_tsv(None if summary is None else summary.weighted_cv_spearman_r_mean),
             _sanitize_tsv(decision.decision_status),

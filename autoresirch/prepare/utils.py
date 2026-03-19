@@ -19,6 +19,7 @@ from .schemas import (
     SPLIT_CONFIG,
     TRAINING_CONFIG,
     CACHE_DIR,
+    ExperimentMode,
     RUNS_DIR,
     RESULTS_TSV,
     RESULTS_HEADER,
@@ -57,6 +58,15 @@ def ensure_runtime_dirs() -> None:
 def ensure_results_tsv() -> None:
     if not RESULTS_TSV.exists():
         RESULTS_TSV.write_text(RESULTS_HEADER, encoding="utf-8")
+
+
+def resolve_primary_metric_name(
+    experiment_mode: ExperimentMode,
+    metric_config: MetricConfig = METRIC_CONFIG,
+) -> str:
+    if experiment_mode == "comparative":
+        return "weighted_cv_overall_auc"
+    return metric_config.primary_metric_name
 
 
 def set_random_seed(seed: int) -> None:

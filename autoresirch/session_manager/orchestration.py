@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import json
 import traceback
 from datetime import datetime
 from pathlib import Path
 
-from autoresirch.prepare import METRIC_CONFIG, run_experiment
+from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG, run_experiment
+from autoresirch.prepare.utils import resolve_primary_metric_name
 from autoresirch.session_manager.analysis import (
     _build_analysis_input_record,
     _build_failure_analysis_input_record,
@@ -46,6 +48,13 @@ from autoresirch.session_manager.storage import (
 )
 
 
+def _session_manager_package():
+    try:
+        return importlib.import_module("session_manager")
+    except ModuleNotFoundError:
+        return importlib.import_module("autoresirch.session_manager")
+
+
 def sync_train_to_incumbent(session_id: str) -> Path:
     state = load_session_state(session_id)
     if state.incumbent_run_id is None:
@@ -54,7 +63,10 @@ def sync_train_to_incumbent(session_id: str) -> Path:
     snapshot_path = incumbent_run_dir / "train_snapshot.py"
     if not snapshot_path.exists():
         raise FileNotFoundError(f"Incumbent snapshot not found at {snapshot_path}.")
-    EDITABLE_TRAIN_FILE.write_text(snapshot_path.read_text(encoding="utf-8"), encoding="utf-8")
+    _session_manager_package().EDITABLE_TRAIN_FILE.write_text(
+        snapshot_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     return snapshot_path
 
 
@@ -84,8 +96,8 @@ def _build_run_context(
     session_run_index: int,
     run_dir: Path,
 ) -> RunContext:
-    git_commit, git_branch, git_is_dirty = _collect_git_metadata()
-    architecture_fingerprint, architecture_spec = _load_architecture_metadata()
+    git_commit, git_branch, git_is_dirty = _session_manager_package()._collect_git_metadata()
+    architecture_fingerprint, architecture_spec = _session_manager_package()._load_architecture_metadata()
     resolved_parent_run_id = intent.parent_run_id or state.incumbent_run_id
     resolved_compared_against_run_id = intent.compared_against_run_id or state.incumbent_run_id
     return RunContext(
@@ -107,9 +119,9 @@ def _build_run_context(
         git_commit=git_commit,
         git_branch=git_branch,
         git_is_dirty=git_is_dirty,
-        train_py_sha256=_sha256_path(EDITABLE_TRAIN_FILE),
+        train_py_sha256=_sha256_path(_session_manager_package().EDITABLE_TRAIN_FILE),
         architecture_fingerprint=architecture_fingerprint,
-        program_md_sha256=_sha256_path(PROGRAM_FILE),
+        program_md_sha256=_sha256_path(_session_manager_package().PROGRAM_FILE),
         architecture_spec=architecture_spec,
     )
 
@@ -172,7 +184,7 @@ def _crash_decision_record(run_context: RunContext, state: SessionState) -> Deci
         session_id=run_context.session_id,
         run_id=run_context.run_id,
         decision_status="crash",
-        decision_metric_name=METRIC_CONFIG.primary_metric_name,
+        decision_metric_name=resolve_primary_metric_name(DATASET_CONFIG.experiment_mode, METRIC_CONFIG),
         decision_metric_value=None,
         decision_baseline_run_id=state.incumbent_run_id,
         decision_baseline_value=state.incumbent_primary_metric_value,
@@ -298,7 +310,10 @@ def _record_crashed_run(
         compared_summary_payload=None,
         session_base_summary_payload=None,
     )
-    RUN_LOG.write_text(failure_path.read_text(encoding="utf-8"), encoding="utf-8")
+    _session_manager_package().RUN_LOG.write_text(
+        failure_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
 
 def run_session_experiment(intent: RunIntent) -> DecisionRecord:
@@ -325,7 +340,7 @@ def run_session_experiment(intent: RunIntent) -> DecisionRecord:
 
     started_at = datetime.fromisoformat(run_context.started_at)
     try:
-        summary = run_experiment(run_dir=run_dir)
+        summary = _session_manager_package().run_experiment(run_dir=run_dir)
     except Exception as exc:
         completed_at = _utc_now_iso()
         run_context.completed_at = completed_at
@@ -384,7 +399,7 @@ def run_session_experiment(intent: RunIntent) -> DecisionRecord:
         compared_summary_payload=compared_summary_payload,
         session_base_summary_payload=session_base_summary_payload,
     )
-    RUN_LOG.write_text(
+    _session_manager_package().RUN_LOG.write_text(
         json.dumps(
             {
                 "session_id": context.session_id,

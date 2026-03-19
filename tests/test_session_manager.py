@@ -51,17 +51,31 @@ def _write_fake_summary(
     run_dir: Path,
     metric_value: float,
     *,
+    experiment_mode: str = "standard",
+    primary_metric_name: str | None = None,
     weighted_cv_rmse_mean: float = 0.31,
     cv_rmse_std: float = 0.02,
     weighted_cv_pearson_r_mean: float | None = 0.2,
     weighted_cv_spearman_r_mean: float | None = 0.25,
+    weighted_cv_overall_auc: float | None = None,
+    weighted_cv_auc_class_neg1: float | None = None,
+    weighted_cv_auc_class_0: float | None = None,
+    weighted_cv_auc_class_pos1: float | None = None,
+    weighted_cv_auc_pos_vs_neg: float | None = None,
     num_params: int = 123,
     train_seconds: float = 1.5,
     diagnostics: dict[str, Any] | None = None,
     architecture: dict[str, Any] | None = None,
 ) -> ExperimentSummary:
+    resolved_primary_metric_name = primary_metric_name
+    if resolved_primary_metric_name is None:
+        resolved_primary_metric_name = (
+            "weighted_cv_overall_auc" if experiment_mode == "comparative" else "weighted_cv_auc"
+        )
+    if experiment_mode == "comparative" and weighted_cv_overall_auc is None:
+        weighted_cv_overall_auc = metric_value
     summary = ExperimentSummary(
-        primary_metric_name="weighted_cv_auc",
+        primary_metric_name=resolved_primary_metric_name,
         primary_metric_value=metric_value,
         metric_direction="higher_is_better",
         improvement_epsilon=1e-4,
@@ -70,7 +84,7 @@ def _write_fake_summary(
         cv_rmse_std=cv_rmse_std,
         weighted_cv_mae_mean=0.22,
         weighted_cv_r2_mean=0.1,
-        weighted_cv_auc_mean=metric_value,
+        weighted_cv_auc_mean=metric_value if experiment_mode == "standard" else None,
         weighted_cv_pearson_r_mean=weighted_cv_pearson_r_mean,
         weighted_cv_spearman_r_mean=weighted_cv_spearman_r_mean,
         pooled_cv_rmse=weighted_cv_rmse_mean,
@@ -89,6 +103,14 @@ def _write_fake_summary(
         test_genes=(),
         cv_genes=("GENE1", "GENE2"),
         run_dir=str(run_dir),
+        experiment_mode=experiment_mode,
+        label_threshold_lower=-0.2 if experiment_mode == "comparative" else None,
+        label_threshold_upper=0.2 if experiment_mode == "comparative" else None,
+        weighted_cv_overall_auc=weighted_cv_overall_auc,
+        weighted_cv_auc_class_neg1=weighted_cv_auc_class_neg1,
+        weighted_cv_auc_class_0=weighted_cv_auc_class_0,
+        weighted_cv_auc_class_pos1=weighted_cv_auc_class_pos1,
+        weighted_cv_auc_pos_vs_neg=weighted_cv_auc_pos_vs_neg,
     )
     architecture_payload = {
         "family": "mlp",
@@ -643,3 +665,85 @@ def test_finalize_handles_hybrid_runs_with_empty_hidden_dims(session_env, monkey
     assert coverage["families_tried"] == ["hybrid_cnn_mlp"]
     assert coverage["depth_values_tried"] == [0]
     assert coverage["max_width_values_tried"] == []
+
+
+def test_candidate_run_comparative_analysis_includes_class_support(session_env, monkeypatch) -> None:
+    session_id = "session-comparative-001"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {
+                    "metric_value": 0.70,
+                    "experiment_mode": "comparative",
+                    "weighted_cv_overall_auc": 0.70,
+                    "weighted_cv_auc_class_neg1": 0.72,
+                    "weighted_cv_auc_class_0": 0.68,
+                    "weighted_cv_auc_class_pos1": 0.71,
+                    "weighted_cv_auc_pos_vs_neg": 0.74,
+                    "diagnostics": {
+                        "fold_count": 2,
+                        "nan_metric_counts": {"auc": 0, "pearson_r": 0, "spearman_r": 0},
+                        "undefined_metric_counts": {
+                            "overall_auc": 0,
+                            "auc_class_neg1": 0,
+                            "auc_class_0": 1,
+                            "auc_class_pos1": 0,
+                            "auc_pos_vs_neg": 0,
+                        },
+                        "best_auc_fold": {"gene": "GENE1", "count": 3, "overall_auc": 0.74},
+                        "worst_auc_fold": {"gene": "GENE2", "count": 3, "overall_auc": 0.66},
+                        "best_rmse_fold": {"gene": "GENE1", "count": 3, "rmse": 0.20},
+                        "worst_rmse_fold": {"gene": "GENE2", "count": 3, "rmse": 0.32},
+                        "class_support": {"folds_missing_neg1": 0, "folds_missing_0": 1, "folds_missing_pos1": 0},
+                    },
+                },
+                {
+                    "metric_value": 0.73,
+                    "experiment_mode": "comparative",
+                    "weighted_cv_overall_auc": 0.73,
+                    "weighted_cv_auc_class_neg1": 0.75,
+                    "weighted_cv_auc_class_0": 0.69,
+                    "weighted_cv_auc_class_pos1": 0.76,
+                    "weighted_cv_auc_pos_vs_neg": 0.80,
+                    "diagnostics": {
+                        "fold_count": 2,
+                        "nan_metric_counts": {"auc": 0, "pearson_r": 0, "spearman_r": 0},
+                        "undefined_metric_counts": {
+                            "overall_auc": 0,
+                            "auc_class_neg1": 0,
+                            "auc_class_0": 1,
+                            "auc_class_pos1": 0,
+                            "auc_pos_vs_neg": 0,
+                        },
+                        "best_auc_fold": {"gene": "GENE1", "count": 3, "overall_auc": 0.77},
+                        "worst_auc_fold": {"gene": "GENE2", "count": 3, "overall_auc": 0.68},
+                        "best_rmse_fold": {"gene": "GENE1", "count": 3, "rmse": 0.18},
+                        "worst_rmse_fold": {"gene": "GENE2", "count": 3, "rmse": 0.30},
+                        "class_support": {"folds_missing_neg1": 0, "folds_missing_0": 1, "folds_missing_pos1": 0},
+                    },
+                },
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Improve comparative AUC.",
+        mutation_summary="Comparative candidate mutation.",
+        description="Comparative candidate run",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    run_dir = Path(state.run_dirs[state.ordered_run_ids[-1]])
+    analysis_input = json.loads(run_dir.joinpath("analysis_input.json").read_text(encoding="utf-8"))
+    synopsis = run_dir.joinpath("synopsis.md").read_text(encoding="utf-8")
+
+    assert analysis_input["metrics"]["weighted_cv_overall_auc"]["delta_vs_compared"] == pytest.approx(0.03)
+    assert analysis_input["metrics"]["weighted_cv_auc_class_0"]["current_value"] == pytest.approx(0.69)
+    assert analysis_input["diagnostics"]["undefined_metric_counts"]["auc_class_0"] == 1
+    assert analysis_input["diagnostics"]["class_support"]["folds_missing_0"] == 1
+    assert "Comparative class support" in synopsis

@@ -17,6 +17,18 @@ from .dataset_preparation import (
     print_dataset_summary,
     read_raw_dataframe,
 )
+from .comparative import (
+    COMPARATIVE_CLASS_VALUES,
+    aggregate_comparative_fold_results,
+    build_comparative_fold_diagnostics,
+    build_comparative_prepared_dataset,
+    build_comparative_prepared_dataset_from_frame,
+    build_comparative_run_diagnostics,
+    comparative_class_labels,
+    evaluate_comparative_predictions,
+    train_comparative_final_holdout,
+    train_comparative_fold,
+)
 from .fold_preprocessor import FoldPreprocessor, TargetScaler, build_cv_folds
 from .orchestration import print_experiment_summary, run_experiment, save_run_summary
 from .schemas import (
@@ -50,6 +62,7 @@ from .schemas import (
     RegressionMetrics,
     SplitConfig,
     TrainingConfig,
+    ExperimentMode,
 )
 from .training_harness import (
     _is_defined,
@@ -84,6 +97,7 @@ from .utils import (
     scale_regression_predictions,
     set_random_seed,
     spearman_r_score,
+    resolve_primary_metric_name,
 )
 
 
@@ -103,6 +117,7 @@ __all__ = [
     "DatasetConfig",
     "SplitConfig",
     "TrainingConfig",
+    "ExperimentMode",
     "MetricConfig",
     "ArchitectureConstraints",
     "ArchitectureSpec",
@@ -121,6 +136,7 @@ __all__ = [
     "_config_fingerprint",
     "ensure_runtime_dirs",
     "ensure_results_tsv",
+    "resolve_primary_metric_name",
     "set_random_seed",
     "count_parameters",
     "rmse",
@@ -149,6 +165,16 @@ __all__ = [
     "build_prepared_dataset_from_frame",
     "prepare_dataset",
     "print_dataset_summary",
+    "build_comparative_prepared_dataset",
+    "build_comparative_prepared_dataset_from_frame",
+    "comparative_class_labels",
+    "build_comparative_fold_diagnostics",
+    "evaluate_comparative_predictions",
+    "aggregate_comparative_fold_results",
+    "build_comparative_run_diagnostics",
+    "train_comparative_fold",
+    "train_comparative_final_holdout",
+    "COMPARATIVE_CLASS_VALUES",
 
     # Fold Preprocessor
     "FoldPreprocessor",

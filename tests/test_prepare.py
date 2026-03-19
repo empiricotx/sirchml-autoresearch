@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 from torch import nn
 
@@ -15,6 +16,8 @@ from autoresirch.prepare import training_harness as training_harness_module
 from prepare import (
     ArchitectureSpec,
     ArchitectureContext,
+    build_comparative_prepared_dataset_from_frame,
+    aggregate_comparative_fold_results,
     DatasetConfig,
     FoldResult,
     MetricConfig,
@@ -621,3 +624,108 @@ def test_train_fold_stops_after_20_non_improving_epochs(monkeypatch) -> None:
 
     assert result.best_epoch == 1
     assert result.epochs == 21
+
+
+def test_comparative_prepared_dataset_builds_unique_within_gene_pairs() -> None:
+    dataframe = make_auc_ready_dataset()
+    prepared = build_comparative_prepared_dataset_from_frame(
+        dataframe,
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            experiment_mode="comparative",
+        ),
+        split_config=SplitConfig(random_seed=7),
+    )
+
+    assert prepared.experiment_mode == "comparative"
+    assert prepared.target_class is not None
+    assert prepared.left_row_ids is not None
+    assert prepared.right_row_ids is not None
+    assert len(prepared.target) == 13
+    assert all(
+        int(left_row_id) < int(right_row_id)
+        for left_row_id, right_row_id in zip(prepared.left_row_ids, prepared.right_row_ids, strict=True)
+    )
+    assert len(
+        {
+            tuple(sorted((int(left_row_id), int(right_row_id))))
+            for left_row_id, right_row_id in zip(prepared.left_row_ids, prepared.right_row_ids, strict=True)
+        }
+    ) == len(prepared.target)
+    assert prepared.numeric_feature_columns == ("delta::feature_score",)
+    assert prepared.flat_features is not None
+    np.testing.assert_allclose(
+        prepared.flat_features.iloc[0].to_numpy(dtype=np.float32),
+        np.array([-0.5], dtype=np.float32),
+    )
+    np.testing.assert_allclose(prepared.target[0], np.array(-0.4, dtype=np.float32))
+    assert int(prepared.target_class[0]) == -1
+
+
+def test_comparative_aggregate_reports_multiclass_auc_fields() -> None:
+    fold_results = [
+        FoldResult(
+            gene="GENE1",
+            count=2,
+            metrics=RegressionMetrics(
+                rmse=0.4,
+                mae=0.3,
+                r2=0.2,
+                squared_error_sum=0.32,
+                auc=None,
+                pearson_r=0.5,
+                spearman_r=0.4,
+                overall_auc=0.7,
+                auc_class_neg1=0.8,
+                auc_class_0=0.6,
+                auc_class_pos1=0.7,
+                auc_pos_vs_neg=0.9,
+            ),
+            train_seconds=1.0,
+            epochs=2,
+            best_epoch=2,
+            num_params=100,
+        ),
+        FoldResult(
+            gene="GENE2",
+            count=6,
+            metrics=RegressionMetrics(
+                rmse=0.2,
+                mae=0.15,
+                r2=0.5,
+                squared_error_sum=0.24,
+                auc=None,
+                pearson_r=0.8,
+                spearman_r=0.7,
+                overall_auc=0.9,
+                auc_class_neg1=0.95,
+                auc_class_0=None,
+                auc_class_pos1=0.85,
+                auc_pos_vs_neg=0.75,
+            ),
+            train_seconds=1.0,
+            epochs=2,
+            best_epoch=1,
+            num_params=100,
+        ),
+    ]
+
+    aggregate = aggregate_comparative_fold_results(
+        fold_results,
+        metric_config=MetricConfig(primary_metric_name="weighted_cv_overall_auc"),
+    )
+
+    assert aggregate["primary_metric_name"] == "weighted_cv_overall_auc"
+    assert aggregate["primary_metric_value"] == pytest.approx((2 * 0.7 + 6 * 0.9) / 8)
+    assert aggregate["weighted_cv_overall_auc"] == pytest.approx((2 * 0.7 + 6 * 0.9) / 8)
+    assert aggregate["weighted_cv_auc_class_neg1"] == pytest.approx((2 * 0.8 + 6 * 0.95) / 8)
+    assert aggregate["weighted_cv_auc_class_0"] == pytest.approx(0.6)
+    assert aggregate["weighted_cv_auc_class_pos1"] == pytest.approx((2 * 0.7 + 6 * 0.85) / 8)
+    assert aggregate["weighted_cv_auc_pos_vs_neg"] == pytest.approx((2 * 0.9 + 6 * 0.75) / 8)
+    assert aggregate["weighted_cv_auc_mean"] is None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import numpy as np
 import pandas as pd
@@ -15,6 +15,7 @@ RUNS_DIR = REPO_ROOT / "runs"
 DATA_DIR = REPO_ROOT / "data"
 RESULTS_TSV = REPO_ROOT / "results.tsv"
 EDITABLE_TRAIN_FILE = REPO_ROOT / "autoresirch" / "train.py"
+ExperimentMode = Literal["standard", "comparative"]
 
 @dataclass(frozen=True)
 class DatasetConfig:
@@ -34,6 +35,7 @@ class DatasetConfig:
     unknown_base: str = "N"
     rnafm_sequence_column: str = "antisense_strand_seq"
     rnafm_embedding_dim: int = 16
+    experiment_mode: ExperimentMode = "standard"
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,9 @@ class MetricConfig:
     prediction_scale_min: float = 0.45
     prediction_scale_max: float = 0.9
     effective_threshold: float = 0.4
+    comparative_no_effect_lower: float = -0.2
+    comparative_no_effect_upper: float = 0.2
+    comparative_auc_strategy: str = "ovr"
 
 
 @dataclass(frozen=True)
@@ -88,7 +93,10 @@ METRIC_CONFIG = MetricConfig()
 ARCHITECTURE_CONSTRAINTS = ArchitectureConstraints()
 
 RESULTS_HEADER = (
-    "commit\tweighted_cv_rmse_mean\tcv_rmse_std\tweighted_cv_auc\tweighted_cv_pearson_r\tweighted_cv_spearman_r\tstatus\tnum_params\ttrain_seconds\tdescription\n"
+    "commit\texperiment_mode\tprimary_metric_name\tprimary_metric_value\tweighted_cv_rmse_mean\t"
+    "cv_rmse_std\tweighted_cv_auc\tweighted_cv_overall_auc\tweighted_cv_auc_pos_vs_neg\t"
+    "weighted_cv_pearson_r\tweighted_cv_spearman_r\tstatus\tnum_params\ttrain_seconds\t"
+    "description\n"
 )
 
 ALLOWED_TRAIN_IMPORTS = {
@@ -179,6 +187,10 @@ class PreparedDataset:
     source_path: str
     sequence_feature_name: str | None = None
     sequence_feature_shape: tuple[int, ...] | None = None
+    experiment_mode: ExperimentMode = "standard"
+    target_class: np.ndarray | None = None
+    left_row_ids: np.ndarray | None = None
+    right_row_ids: np.ndarray | None = None
 
     @property
     def features(self) -> pd.DataFrame:
@@ -218,6 +230,11 @@ class RegressionMetrics:
     auc: float | None
     pearson_r: float | None
     spearman_r: float | None
+    overall_auc: float | None = None
+    auc_class_neg1: float | None = None
+    auc_class_0: float | None = None
+    auc_class_pos1: float | None = None
+    auc_pos_vs_neg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +244,10 @@ class FoldDiagnostics:
     clipped_low_fraction: float | None = None
     clipped_high_fraction: float | None = None
     effective_positive_rate: float | None = None
+    class_count_neg1: int | None = None
+    class_count_0: int | None = None
+    class_count_pos1: int | None = None
+    undefined_auc_metrics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -271,6 +292,19 @@ class ExperimentSummary:
     test_genes: tuple[str, ...]
     cv_genes: tuple[str, ...]
     run_dir: str
+    experiment_mode: ExperimentMode = "standard"
+    label_threshold_lower: float | None = None
+    label_threshold_upper: float | None = None
+    weighted_cv_overall_auc: float | None = None
+    weighted_cv_auc_class_neg1: float | None = None
+    weighted_cv_auc_class_0: float | None = None
+    weighted_cv_auc_class_pos1: float | None = None
+    weighted_cv_auc_pos_vs_neg: float | None = None
+    test_overall_auc: float | None = None
+    test_auc_class_neg1: float | None = None
+    test_auc_class_0: float | None = None
+    test_auc_class_pos1: float | None = None
+    test_auc_pos_vs_neg: float | None = None
 
 
 @dataclass(frozen=True)
