@@ -10,6 +10,13 @@
     linear-gradient(180deg, #f6f1e8 0%, #f1f5f7 100%);
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -17,6 +24,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 a {
@@ -54,6 +62,7 @@ pre {
 }
 
 .app-shell {
+  width: 100%;
   max-width: 1280px;
   margin: 0 auto;
   padding: 2rem 1.25rem 4rem;
@@ -65,6 +74,7 @@ pre {
   gap: 2rem;
   align-items: end;
   margin-bottom: 2rem;
+  max-width: 100%;
 }
 
 .app-title {
@@ -73,17 +83,28 @@ pre {
   font-weight: 700;
   letter-spacing: -0.04em;
   color: #122029;
+  overflow-wrap: anywhere;
 }
 
 .app-subtitle {
   max-width: 24rem;
   color: #4f6670;
+  overflow-wrap: anywhere;
 }
 
 .app-main,
 .page-stack {
   display: grid;
   gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  max-width: 100%;
+}
+
+.app-main > *,
+.page-stack > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .hero-panel,
@@ -92,6 +113,8 @@ pre {
   border: 1px solid rgba(18, 32, 41, 0.08);
   border-radius: 22px;
   box-shadow: 0 18px 45px rgba(18, 32, 41, 0.08);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .hero-panel {
@@ -111,9 +134,12 @@ pre {
   display: grid;
   gap: 1rem;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  width: 100%;
+  max-width: 100%;
 }
 
 .metric-card {
+  min-width: 0;
   padding: 1rem;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.82);
@@ -133,6 +159,8 @@ pre {
   margin-top: 0.45rem;
   font-size: 1.6rem;
   font-weight: 700;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .metric-hint {
@@ -193,9 +221,12 @@ pre {
   display: grid;
   gap: 1rem;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  width: 100%;
+  max-width: 100%;
 }
 
 .key-value-item {
+  min-width: 0;
   padding-top: 0.5rem;
   border-top: 1px solid rgba(18, 32, 41, 0.08);
 }
@@ -203,19 +234,84 @@ pre {
 .key-value-value {
   margin-top: 0.25rem;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body {
   color: #22353f;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body pre,
 .json-block {
   overflow-x: auto;
+  max-width: 100%;
   padding: 1rem;
   border-radius: 16px;
   background: #13222a;
   color: #edf4f7;
+}
+
+.json-block {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plot-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.plot-caption {
+  margin: 0;
+  color: #556c77;
+}
+
+.plot-frame {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.improvement-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-width: 720px;
+}
+
+.plot-gridline {
+  stroke: rgba(18, 32, 41, 0.12);
+  stroke-dasharray: 4 8;
+}
+
+.plot-axis {
+  stroke: rgba(18, 32, 41, 0.3);
+  stroke-width: 1.5;
+}
+
+.plot-axis-label {
+  fill: #5b737f;
+  font-size: 12px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+.plot-line {
+  fill: none;
+  stroke: #175873;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plot-point {
+  fill: #c06f1c;
+  stroke: #fff;
+  stroke-width: 2;
 }
 
 .muted {
@@ -234,5 +330,10 @@ pre {
 
   .app-shell {
     padding: 1rem 0.85rem 3rem;
+  }
+
+  .metrics-grid,
+  .key-value-grid {
+    grid-template-columns: 1fr;
   }
 }

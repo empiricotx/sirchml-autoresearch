@@ -149,6 +149,106 @@ export function JsonPanel({ title, value }) {
   );
 }
 
+export function ImprovementPlot({ items }) {
+  const points = buildImprovementSeries(items);
+  if (points.length === 0) {
+    return null;
+  }
+
+  const width = 960;
+  const height = 280;
+  const padding = { top: 24, right: 24, bottom: 44, left: 64 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const xMax = Math.max(...points.map((point) => point.x), 1);
+  const yValues = points.map((point) => point.y);
+  const yMin = Math.min(...yValues);
+  const yMax = Math.max(...yValues);
+  const ySpan = Math.max(yMax - yMin, 0.001);
+  const yFloor = Math.max(0, yMin - ySpan * 0.15);
+  const yCeiling = Math.min(1, yMax + ySpan * 0.15);
+  const adjustedSpan = Math.max(yCeiling - yFloor, 0.001);
+
+  const scaleX = (value) => padding.left + (value / xMax) * innerWidth;
+  const scaleY = (value) => padding.top + (1 - (value - yFloor) / adjustedSpan) * innerHeight;
+  const pathData = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${scaleX(point.x)} ${scaleY(point.y)}`)
+    .join(" ");
+
+  const yTicks = [yFloor, yFloor + adjustedSpan / 2, yCeiling];
+
+  return (
+    <section className="panel">
+      <div className="plot-header">
+        <div>
+          <h2>Best Performance Over Time</h2>
+          <p className="plot-caption">Only runs that improved the best weighted CV AUC are shown.</p>
+        </div>
+      </div>
+      <div className="plot-frame">
+        <svg viewBox={`0 0 ${width} ${height}`} className="improvement-plot" role="img" aria-label="Best performance over time">
+          {yTicks.map((tick) => {
+            const y = scaleY(tick);
+            return (
+              <g key={tick}>
+                <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} className="plot-gridline" />
+                <text x={padding.left - 12} y={y + 4} textAnchor="end" className="plot-axis-label">
+                  {tick.toFixed(3)}
+                </text>
+              </g>
+            );
+          })}
+          <line
+            x1={padding.left}
+            y1={height - padding.bottom}
+            x2={width - padding.right}
+            y2={height - padding.bottom}
+            className="plot-axis"
+          />
+          <line
+            x1={padding.left}
+            y1={padding.top}
+            x2={padding.left}
+            y2={height - padding.bottom}
+            className="plot-axis"
+          />
+          <path d={pathData} className="plot-line" />
+          {points.map((point) => (
+            <g key={point.label}>
+              <circle cx={scaleX(point.x)} cy={scaleY(point.y)} r="5" className="plot-point" />
+              <text x={scaleX(point.x)} y={height - padding.bottom + 22} textAnchor="middle" className="plot-axis-label">
+                r{String(point.x).padStart(3, "0")}
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
+    </section>
+  );
+}
+
+function buildImprovementSeries(items) {
+  let bestValue = Number.NEGATIVE_INFINITY;
+  return items
+    .filter((item) => item.weighted_cv_auc !== null && item.weighted_cv_auc !== undefined)
+    .reduce((series, item) => {
+      const auc = Number(item.weighted_cv_auc);
+      const x = Number(item.session_run_index);
+      if (Number.isNaN(auc) || Number.isNaN(x)) {
+        return series;
+      }
+      if (auc > bestValue) {
+        bestValue = auc;
+        series.push({
+          x,
+          y: auc,
+          label: item.run_id,
+        });
+      }
+      return series;
+    }, []);
+}
+
 export function formatNumber(value) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "n/a";

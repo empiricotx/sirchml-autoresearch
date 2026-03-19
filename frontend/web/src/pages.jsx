@@ -3,6 +3,7 @@ import { getRun, getSession, getSessions } from "./api";
 import {
   EmptyState,
   ErrorState,
+  ImprovementPlot,
   JsonPanel,
   KeyValueGrid,
   LoadingState,
@@ -58,6 +59,8 @@ export function SessionDetailPage() {
   const summary = data.summary || {};
   const state = data.state || {};
   const runs = data.runs || [];
+  const bestAuc = summary.best_primary_metric_value ?? state.incumbent_primary_metric_value;
+  const bestRunId = summary.best_run_id || state.incumbent_run_id;
 
   return (
     <div className="page-stack">
@@ -71,9 +74,9 @@ export function SessionDetailPage() {
       </section>
       <section className="metrics-grid">
         <MetricCard label="Status" value={state.status || summary.status || "n/a"} />
-        <MetricCard label="Best AUC" value={formatNumber(summary.best_primary_metric_value)} />
+        <MetricCard label="Best AUC" value={formatNumber(bestAuc)} />
         <MetricCard label="Total Runs" value={summary.total_runs ?? runs.length} />
-        <MetricCard label="Best Run" value={summary.best_run_id || state.incumbent_run_id || "n/a"} />
+        <MetricCard label="Best Run" value={bestRunId || "n/a"} />
       </section>
       <KeyValueGrid
         title="Session Metadata"
@@ -88,6 +91,7 @@ export function SessionDetailPage() {
           { label: "Recommended Next Start", value: summary.recommended_next_starting_run_id },
         ]}
       />
+      <ImprovementPlot items={runs} />
       <MarkdownPanel title="Session Summary" content={data.summary_markdown} />
       <section>
         <h2>Runs</h2>
