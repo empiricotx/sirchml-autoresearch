@@ -66,7 +66,9 @@ Do not infer the active mode. Read the current run summary, `analysis_input.json
 2. Confirm the cached dataset exists. If not, tell the human to run:
 
 ```bash
-uv run python -m autoresirch.prepare.cli
+uv run python -m autoresirch.prepare.cli \
+  --experiment-mode <standard|comparative> \
+  --raw-data-path <path/to/raw.csv>
 ```
 
 3. Start a session:
@@ -74,10 +76,13 @@ uv run python -m autoresirch.prepare.cli
 ```bash
 uv run python -m autoresirch.session_manager.cli start \
   --experiment-mode <standard|comparative> \
+  --raw-data-path <path/to/raw.csv> \
   --initiated-by agent
 ```
 
-The session manager stores this mode in `session_context.json`. All runs in the session must use that stored mode.
+The session manager prepares and caches the dataset inside `sessions/<session_id>/prepared_data/`, then stores the session's mode, raw data path, feature names, and resolved dataset config in `session_context.json`.
+
+All runs in the session must use that stored dataset context. Do not switch datasets mid-session.
 
 4. Run the unmodified baseline as the base run:
 
@@ -145,6 +150,7 @@ uv run python -m autoresirch.session_manager.cli status --session-id <session_id
 ```
 
 `status` reports the persisted session `experiment_mode`.
+`status` also reports the persisted `raw_data_path`.
 
 12. Finalize when done:
 
@@ -196,7 +202,9 @@ Do not change:
 
 Keep a run only if its primary metric improves by more than the configured epsilon.
 
-Use secondary metrics only to interpret the run and choose the next mutation.
+If the primary-metric delta is within the epsilon band, use `weighted_cv_pearson_r_mean` as the tiebreaker.
+
+Fold checkpointing and early stopping are primary-metric-first. RMSE is only a fallback when the primary fold metric is undefined.
 
 Important:
 

@@ -8,8 +8,8 @@ from autoresirch.prepare import ArchitectureContext, ArchitectureSpec, run_exper
 
 ARCHITECTURE = ArchitectureSpec(
     family="mlp",
-    hidden_dims=(48,),
-    activation="relu",
+    hidden_dims=(56,),
+    activation="gelu",
     dropout=0.0,
     normalization="none",
     use_bias=True,

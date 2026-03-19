@@ -92,6 +92,12 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _primary_metric_name_for_mode(experiment_mode: Any) -> str:
+    if experiment_mode == "comparative":
+        return "weighted_cv_overall_auc"
+    return "weighted_cv_auc"
+
+
 def list_sessions() -> list[dict[str, Any]]:
     sessions_root = get_sessions_root()
     if not sessions_root.exists():
@@ -103,13 +109,17 @@ def list_sessions() -> list[dict[str, Any]]:
             continue
 
         session_id = session_dir.name
+        context = _read_json(session_dir / "session_context.json") or {}
         state = _read_json(session_dir / "session_state.json") or {}
         summary = _read_json(session_dir / "session_summary.json") or {}
+        experiment_mode = context.get("experiment_mode")
 
         total_runs = _first_non_none(summary.get("total_runs"), len(state.get("ordered_run_ids", [])))
 
         item = {
             "session_id": session_id,
+            "experiment_mode": experiment_mode,
+            "primary_metric_name": _primary_metric_name_for_mode(experiment_mode),
             "status": _first_non_none(state.get("status"), summary.get("status")),
             "objective": _first_non_none(state.get("objective"), summary.get("objective")),
             "started_at": _first_non_none(state.get("started_at"), summary.get("started_at")),
@@ -166,7 +176,11 @@ def list_session_runs(session_id: str) -> list[dict[str, Any]]:
             {
                 **row,
                 "session_run_index": _coerce_int(row.get("session_run_index")),
+                "primary_metric_name": row.get("primary_metric_name"),
+                "primary_metric_value": _coerce_float(row.get("primary_metric_value")),
                 "weighted_cv_auc": _coerce_float(row.get("weighted_cv_auc")),
+                "weighted_cv_overall_auc": _coerce_float(row.get("weighted_cv_overall_auc")),
+                "weighted_cv_auc_pos_vs_neg": _coerce_float(row.get("weighted_cv_auc_pos_vs_neg")),
                 "weighted_cv_rmse_mean": _coerce_float(row.get("weighted_cv_rmse_mean")),
                 "cv_rmse_std": _coerce_float(row.get("cv_rmse_std")),
                 "weighted_cv_pearson_r": _coerce_float(row.get("weighted_cv_pearson_r")),
@@ -192,6 +206,9 @@ def get_run_detail(session_id: str, run_id: str) -> dict[str, Any]:
         raise FileNotFoundError(f"Run {run_id!r} was not found in session {session_id!r}.")
 
     summary_payload = _read_json(run_dir / "summary.json")
+    summary_metrics = (summary_payload or {}).get("summary") or {}
+    analysis_input = _read_json(run_dir / "analysis_input.json")
+    agent_analysis = _read_json(run_dir / "agent_analysis.json")
     return {
         "session_id": session_id,
         "run_id": run_id,
@@ -199,7 +216,9 @@ def get_run_detail(session_id: str, run_id: str) -> dict[str, Any]:
         "run_context": _read_json(run_dir / "run_context.json"),
         "decision": _read_json(run_dir / "decision.json"),
         "summary": summary_payload,
-        "analysis_input": _read_json(run_dir / "analysis_input.json"),
-        "agent_analysis": _read_json(run_dir / "agent_analysis.json"),
+        "primary_metric_name": summary_metrics.get("primary_metric_name"),
+        "primary_metric_value": _coerce_float(summary_metrics.get("primary_metric_value")),
+        "analysis_input": analysis_input,
+        "agent_analysis": agent_analysis,
         "synopsis_markdown": _read_markdown(run_dir / "synopsis.md"),
     }

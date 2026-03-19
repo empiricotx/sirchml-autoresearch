@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import subprocess
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,12 +11,15 @@ from typing import Any
 from autoresirch.prepare import (
     ARCHITECTURE_CONSTRAINTS,
     DATASET_CONFIG,
+    DatasetConfig,
     ExperimentMode,
     METRIC_CONFIG,
+    PreparedDataset,
     SPLIT_CONFIG,
     TRAINING_CONFIG,
     ExperimentSummary,
     load_train_definition,
+    prepare_dataset,
 )
 
 
@@ -126,6 +129,10 @@ def _session_runs_dir(session_id: str) -> Path:
     return _session_dir(session_id) / "runs"
 
 
+def _session_prepare_cache_dir(session_id: str) -> Path:
+    return _session_dir(session_id) / "prepared_data"
+
+
 def _session_results_path(session_id: str) -> Path:
     return _session_dir(session_id) / "results.tsv"
 
@@ -162,14 +169,37 @@ def _run_id_for_index(session_id: str, session_run_index: int) -> str:
     return f"{session_id}-r{session_run_index:03d}"
 
 
-def _config_fingerprints() -> dict[str, str]:
+def _config_fingerprints(*, dataset_config: DatasetConfig) -> dict[str, str]:
     return {
-        "dataset_config_fingerprint": _fingerprint_payload(asdict(DATASET_CONFIG)),
+        "dataset_config_fingerprint": _fingerprint_payload(asdict(dataset_config)),
         "split_config_fingerprint": _fingerprint_payload(asdict(SPLIT_CONFIG)),
         "training_config_fingerprint": _fingerprint_payload(asdict(TRAINING_CONFIG)),
         "metric_config_fingerprint": _fingerprint_payload(asdict(METRIC_CONFIG)),
         "constraints_fingerprint": _fingerprint_payload(asdict(ARCHITECTURE_CONSTRAINTS)),
     }
+
+
+def _normalize_dataset_config_payload(payload: dict[str, Any]) -> DatasetConfig:
+    normalized = dict(payload)
+    normalized["raw_data_path"] = Path(normalized["raw_data_path"])
+    for key in (
+        "sequence_columns",
+        "numeric_columns",
+        "categorical_columns",
+        "drop_columns",
+        "explicit_test_genes",
+        "explicit_cv_genes",
+    ):
+        normalized[key] = tuple(normalized.get(key, ()))
+    return DatasetConfig(**normalized)
+
+
+def dataset_config_from_session_context(context: SessionContext) -> DatasetConfig:
+    return _normalize_dataset_config_payload(context.dataset_config_payload)
+
+
+def _feature_names_from_prepared_dataset(prepared: PreparedDataset) -> tuple[str, ...]:
+    return tuple(str(column) for column in prepared.features.columns)
 
 
 def create_session(
@@ -178,6 +208,7 @@ def create_session(
     objective: str,
     initiated_by: str,
     experiment_mode: ExperimentMode,
+    raw_data_path: Path | None = None,
 ) -> SessionContext:
     resolved_session_id = session_id or _generate_session_id()
     session_dir = _session_dir(resolved_session_id)
@@ -188,7 +219,17 @@ def create_session(
     _session_runs_dir(resolved_session_id).mkdir(parents=True, exist_ok=False)
     _session_results_path(resolved_session_id).write_text(SESSION_RESULTS_HEADER, encoding="utf-8")
 
-    config_fingerprints = _config_fingerprints()
+    session_dataset_config = replace(
+        DATASET_CONFIG,
+        raw_data_path=raw_data_path or DATASET_CONFIG.raw_data_path,
+        experiment_mode=experiment_mode,
+    )
+    prepared_dataset_cache_dir = _session_prepare_cache_dir(resolved_session_id)
+    prepared = prepare_dataset(
+        dataset_config=session_dataset_config,
+        artifact_root=prepared_dataset_cache_dir,
+    )
+    config_fingerprints = _config_fingerprints(dataset_config=session_dataset_config)
     base_run_id = _run_id_for_index(resolved_session_id, 0)
     context = SessionContext(
         session_id=resolved_session_id,
@@ -197,6 +238,10 @@ def create_session(
         objective=objective,
         initiated_by=initiated_by,
         experiment_mode=experiment_mode,
+        raw_data_path=session_dataset_config.raw_data_path,
+        prepared_dataset_cache_dir=prepared_dataset_cache_dir,
+        feature_names=_feature_names_from_prepared_dataset(prepared),
+        dataset_config_payload=asdict(session_dataset_config),
         program_md_sha256=_sha256_path(_session_manager_package().PROGRAM_FILE),
         **config_fingerprints,
     )
@@ -214,7 +259,11 @@ def create_session(
 
 
 def load_session_context(session_id: str) -> SessionContext:
-    return SessionContext(**_read_json(_session_context_path(session_id)))
+    payload = _read_json(_session_context_path(session_id))
+    payload["raw_data_path"] = Path(payload["raw_data_path"])
+    payload["prepared_dataset_cache_dir"] = Path(payload["prepared_dataset_cache_dir"])
+    payload["feature_names"] = tuple(payload.get("feature_names", ()))
+    return SessionContext(**payload)
 
 
 def load_session_state(session_id: str) -> SessionState:

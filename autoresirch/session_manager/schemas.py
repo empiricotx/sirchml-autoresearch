@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from autoresirch.prepare import ExperimentMode
@@ -14,6 +15,10 @@ class SessionContext:
     objective: str
     initiated_by: str
     experiment_mode: ExperimentMode
+    raw_data_path: Path
+    prepared_dataset_cache_dir: Path
+    feature_names: tuple[str, ...]
+    dataset_config_payload: dict[str, Any]
     dataset_config_fingerprint: str
     split_config_fingerprint: str
     training_config_fingerprint: str

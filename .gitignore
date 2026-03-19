@@ -28,3 +28,7 @@ results.tsv
 # Local datasets
 data/*
 !data/README.md
+
+
+# Frontend dependencies
+frontend/web/node_modules

@@ -23,9 +23,13 @@ from .schemas import (
     RUNS_DIR,
     RESULTS_TSV,
     RESULTS_HEADER,
+    ArchitectureConstraints,
+    DatasetConfig,
+    FoldDiagnostics,
     MetricConfig,
     RegressionMetrics,
-    FoldDiagnostics,
+    SplitConfig,
+    TrainingConfig,
 )
 
 
@@ -39,13 +43,20 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Value is not JSON serializable: {type(value)!r}")
 
 
-def _config_fingerprint() -> str:
+def _config_fingerprint(
+    *,
+    dataset_config: DatasetConfig = DATASET_CONFIG,
+    split_config: SplitConfig = SPLIT_CONFIG,
+    training_config: TrainingConfig = TRAINING_CONFIG,
+    metric_config: MetricConfig = METRIC_CONFIG,
+    constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
+) -> str:
     payload = {
-        "dataset": asdict(DATASET_CONFIG),
-        "split": asdict(SPLIT_CONFIG),
-        "training": asdict(TRAINING_CONFIG),
-        "metric": asdict(METRIC_CONFIG),
-        "constraints": asdict(ARCHITECTURE_CONSTRAINTS),
+        "dataset": asdict(dataset_config),
+        "split": asdict(split_config),
+        "training": asdict(training_config),
+        "metric": asdict(metric_config),
+        "constraints": asdict(constraints),
     }
     return json.dumps(payload, sort_keys=True, default=_json_default)
 

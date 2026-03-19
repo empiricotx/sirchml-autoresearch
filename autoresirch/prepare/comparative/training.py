@@ -29,6 +29,7 @@ from autoresirch.prepare.standard.training import (
     _build_context,
     _fit_flat_preprocessor,
     _is_defined,
+    _metrics_improved_for_checkpoint_selection,
     _pick_fold_by_metric,
     _slice_sequence_features,
     _state_dict_to_cpu,
@@ -55,6 +56,7 @@ def train_comparative_fold(
     build_model: ModelBuilder,
     *,
     training_config: TrainingConfig = TRAINING_CONFIG,
+    metric_config: MetricConfig = METRIC_CONFIG,
     constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
     seed: int,
     budget_seconds: float,
@@ -131,7 +133,11 @@ def train_comparative_fold(
             )
         )
         metrics = evaluate_comparative_predictions(val_target, val_prediction)
-        if best_metrics is None or metrics.rmse < best_metrics.rmse:
+        if _metrics_improved_for_checkpoint_selection(
+            metrics,
+            best_metrics,
+            metric_config=metric_config,
+        ):
             best_metrics = metrics
             best_diagnostics = build_comparative_fold_diagnostics(val_target, val_prediction)
             best_state = _state_dict_to_cpu(model)

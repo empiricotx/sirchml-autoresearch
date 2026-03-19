@@ -41,6 +41,55 @@ from autoresirch.prepare.standard.preprocessing import FoldPreprocessor, TargetS
 BatchPayload = dict[str, torch.Tensor]
 
 
+def _metric_value_for_checkpoint_selection(
+    metrics: RegressionMetrics,
+    *,
+    metric_config: MetricConfig,
+) -> float | None:
+    metric_name = metric_config.primary_metric_name
+    if metric_name == "weighted_cv_auc":
+        return metrics.auc
+    if metric_name == "weighted_cv_overall_auc":
+        return metrics.overall_auc
+    if metric_name == "weighted_cv_rmse_mean":
+        return metrics.rmse
+    raise ValueError(f"Unsupported primary metric for checkpoint selection: {metric_name}")
+
+
+def _metrics_improved_for_checkpoint_selection(
+    current_metrics: RegressionMetrics,
+    best_metrics: RegressionMetrics | None,
+    *,
+    metric_config: MetricConfig,
+) -> bool:
+    if best_metrics is None:
+        return True
+
+    current_primary = _metric_value_for_checkpoint_selection(
+        current_metrics,
+        metric_config=metric_config,
+    )
+    best_primary = _metric_value_for_checkpoint_selection(
+        best_metrics,
+        metric_config=metric_config,
+    )
+    direction = metric_config.primary_metric_direction
+
+    if current_primary is not None and not math.isnan(current_primary):
+        if best_primary is None or math.isnan(best_primary):
+            return True
+        if direction == "higher_is_better" and current_primary > best_primary:
+            return True
+        if direction == "lower_is_better" and current_primary < best_primary:
+            return True
+        if current_primary != best_primary:
+            return False
+    elif best_primary is not None and not math.isnan(best_primary):
+        return False
+
+    return current_metrics.rmse < best_metrics.rmse
+
+
 class MultiModalTensorDataset(Dataset[BatchPayload]):
     def __init__(
         self,
@@ -276,6 +325,7 @@ def train_fold(
     build_model: ModelBuilder,
     *,
     training_config: TrainingConfig = TRAINING_CONFIG,
+    metric_config: MetricConfig = METRIC_CONFIG,
     constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
     seed: int,
     budget_seconds: float,
@@ -352,7 +402,11 @@ def train_fold(
             )
         )
         metrics = evaluate_predictions(val_target, val_prediction)
-        if best_metrics is None or metrics.rmse < best_metrics.rmse:
+        if _metrics_improved_for_checkpoint_selection(
+            metrics,
+            best_metrics,
+            metric_config=metric_config,
+        ):
             best_metrics = metrics
             best_diagnostics = build_fold_diagnostics(val_target, val_prediction)
             best_epoch = epoch

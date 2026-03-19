@@ -340,19 +340,25 @@ def prepare_dataset(
     split_config: SplitConfig = SPLIT_CONFIG,
     force: bool = False,
     include_rnafm_embeddings: bool = False,
+    artifact_root: Path | None = None,
 ) -> PreparedDataset:
     ensure_runtime_dirs()
     artifact_suffix = f"_{dataset_config.experiment_mode}"
     if include_rnafm_embeddings:
         artifact_suffix = f"{artifact_suffix}_rnafm"
-    artifact_path = CACHE_DIR / f"prepared_dataset{artifact_suffix}.pkl"
-    metadata_path = CACHE_DIR / f"prepared_dataset_metadata{artifact_suffix}.json"
+    cache_root = artifact_root or CACHE_DIR
+    cache_root.mkdir(parents=True, exist_ok=True)
+    artifact_path = cache_root / f"prepared_dataset{artifact_suffix}.pkl"
+    metadata_path = cache_root / f"prepared_dataset_metadata{artifact_suffix}.json"
 
     source_path = dataset_config.raw_data_path
     source_mtime = source_path.stat().st_mtime if source_path.exists() else None
     fingerprint = json.dumps(
         {
-            "base_fingerprint": _config_fingerprint(),
+            "base_fingerprint": _config_fingerprint(
+                dataset_config=dataset_config,
+                split_config=split_config,
+            ),
             "include_rnafm_embeddings": include_rnafm_embeddings,
         },
         sort_keys=True,
@@ -385,6 +391,7 @@ def prepare_dataset(
             {
                 "config_fingerprint": fingerprint,
                 "source_mtime": source_mtime,
+                "source_path": str(source_path),
                 "num_rows": len(prepared.target),
             },
             indent=2,

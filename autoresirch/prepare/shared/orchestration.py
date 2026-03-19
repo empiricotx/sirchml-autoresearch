@@ -53,6 +53,11 @@ def save_run_summary(
     *,
     run_dir: Path,
     latest_summary_path: Path | None = None,
+    dataset_config: DatasetConfig = DATASET_CONFIG,
+    split_config: SplitConfig = SPLIT_CONFIG,
+    training_config: TrainingConfig = TRAINING_CONFIG,
+    metric_config: MetricConfig = METRIC_CONFIG,
+    constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
 ) -> None:
     if summary.experiment_mode == "comparative":
         diagnostics_payload = build_comparative_run_diagnostics(fold_results)
@@ -75,11 +80,11 @@ def save_run_summary(
             for result in fold_results
         ],
         "diagnostics": diagnostics_payload,
-        "constraints": asdict(ARCHITECTURE_CONSTRAINTS),
-        "training_config": asdict(TRAINING_CONFIG),
-        "dataset_config": asdict(DATASET_CONFIG),
-        "split_config": asdict(SPLIT_CONFIG),
-        "metric_config": asdict(METRIC_CONFIG),
+        "constraints": asdict(constraints),
+        "training_config": asdict(training_config),
+        "dataset_config": asdict(dataset_config),
+        "split_config": asdict(split_config),
+        "metric_config": asdict(metric_config),
     }
     run_dir.joinpath("summary.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True, default=_json_default),
@@ -200,6 +205,7 @@ def run_experiment(
     constraints: ArchitectureConstraints = ARCHITECTURE_CONSTRAINTS,
     run_dir: Path | None = None,
     latest_summary_path: Path | None = None,
+    prepared_dataset_cache_dir: Path | None = None,
 ) -> ExperimentSummary:
     ensure_runtime_dirs()
 
@@ -217,6 +223,7 @@ def run_experiment(
         dataset_config=dataset_config,
         split_config=split_config,
         include_rnafm_embeddings=architecture.use_rnafm_embeddings,
+        artifact_root=prepared_dataset_cache_dir,
     )
     folds = build_cv_folds(prepared)
     fold_budget, final_budget = validate_budget(
@@ -245,6 +252,7 @@ def run_experiment(
             architecture,
             build_model,
             training_config=training_config,
+            metric_config=active_metric_config,
             constraints=constraints,
             seed=split_config.random_seed + fold_index,
             budget_seconds=fold_budget,
@@ -399,6 +407,11 @@ def run_experiment(
         architecture,
         run_dir=active_run_dir,
         latest_summary_path=latest_summary_path,
+        dataset_config=dataset_config,
+        split_config=split_config,
+        training_config=training_config,
+        metric_config=active_metric_config,
+        constraints=constraints,
     )
     print_experiment_summary(summary)
     return summary

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
+from pathlib import Path
 from typing import Sequence
 
 from autoresirch.prepare import DATASET_CONFIG, ExperimentMode, METRIC_CONFIG
@@ -28,6 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--session-id", default=None)
     start_parser.add_argument("--objective", default=None)
     start_parser.add_argument("--initiated-by", default="agent")
+    start_parser.add_argument("--raw-data-path", type=Path, default=None)
     start_parser.add_argument(
         "--experiment-mode",
         choices=EXPERIMENT_MODE_CHOICES,
@@ -87,6 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             objective=objective,
             initiated_by=args.initiated_by,
             experiment_mode=args.experiment_mode,
+            raw_data_path=args.raw_data_path,
         )
         print(context.session_id)
         return 0
@@ -132,6 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "session_id": state.session_id,
             "status": state.status,
             "experiment_mode": context.experiment_mode,
+            "raw_data_path": str(context.raw_data_path),
             "latest_run_id": state.latest_run_id,
             "incumbent_run_id": state.incumbent_run_id,
             "incumbent_primary_metric_value": state.incumbent_primary_metric_value,

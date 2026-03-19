@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 import autoresirch.prepare as prepare_package
+from autoresirch.prepare import cli as prepare_cli
 import prepare as prepare_module
 from autoresirch.prepare.shared import orchestration as orchestration_module
 from autoresirch.prepare.standard import training as training_harness_module
@@ -19,6 +20,7 @@ from prepare import (
     build_comparative_prepared_dataset_from_frame,
     aggregate_comparative_fold_results,
     DatasetConfig,
+    FoldDiagnostics,
     FoldResult,
     MetricConfig,
     RegressionMetrics,
@@ -32,6 +34,7 @@ from prepare import (
     run_experiment,
     scale_regression_predictions,
     train_fold,
+    train_comparative_fold,
     validate_architecture_spec,
     validate_train_source,
 )
@@ -357,18 +360,20 @@ def test_run_experiment_writes_to_custom_run_dir_and_diagnostics(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    dataset_config = DatasetConfig(
+        raw_data_path=Path("data/mock.csv"),
+        target_column="target",
+        gene_column="gene",
+        sequence_columns=(),
+        drop_columns=("sirna_sequence", "antisense_strand_seq"),
+        explicit_test_genes=("GENE3",),
+        explicit_cv_genes=("GENE1", "GENE2"),
+        max_sequence_length=6,
+        experiment_mode="comparative",
+    )
     prepared = build_prepared_dataset_from_frame(
         make_auc_ready_dataset(),
-        dataset_config=DatasetConfig(
-            raw_data_path=Path("data/mock.csv"),
-            target_column="target",
-            gene_column="gene",
-            sequence_columns=(),
-            drop_columns=("sirna_sequence", "antisense_strand_seq"),
-            explicit_test_genes=("GENE3",),
-            explicit_cv_genes=("GENE1", "GENE2"),
-            max_sequence_length=6,
-        ),
+        dataset_config=dataset_config,
     )
     monkeypatch.setattr(orchestration_module, "prepare_dataset", lambda *args, **kwargs: prepared)
 
@@ -399,6 +404,7 @@ def test_run_experiment_writes_to_custom_run_dir_and_diagnostics(
             min_final_fit_budget_seconds=0.0,
             device="cpu",
         ),
+        dataset_config=dataset_config,
         run_dir=custom_run_dir,
         latest_summary_path=latest_summary_path,
     )
@@ -406,7 +412,9 @@ def test_run_experiment_writes_to_custom_run_dir_and_diagnostics(
     payload = json.loads(custom_run_dir.joinpath("summary.json").read_text(encoding="utf-8"))
     assert summary.run_dir == str(custom_run_dir)
     assert payload["diagnostics"]["fold_count"] == 2
-    assert "prediction_behavior" in payload["diagnostics"]
+    assert "class_support" in payload["diagnostics"]
+    assert payload["dataset_config"]["raw_data_path"] == "data/mock.csv"
+    assert payload["dataset_config"]["experiment_mode"] == "comparative"
     assert latest_summary_path.exists()
 
 
@@ -476,6 +484,40 @@ def test_refactored_prepare_cli_uses_dataset_preparation_exports() -> None:
         "print_dataset_summary",
         prepare_package.print_dataset_summary,
     ) or callable(prepare_package.print_dataset_summary)
+
+
+def test_prepare_cli_passes_raw_data_path_override(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_prepare_dataset(*, dataset_config, force: bool = False, **_kwargs):
+        observed["raw_data_path"] = dataset_config.raw_data_path
+        observed["experiment_mode"] = dataset_config.experiment_mode
+        observed["force"] = force
+        return object()
+
+    monkeypatch.setattr(
+        prepare_cli,
+        "parse_args",
+        lambda: type(
+            "Args",
+            (),
+            {
+                "force": True,
+                "raw_data_path": Path("data/all_feature_data_subset_for_comparative_model.csv"),
+                "experiment_mode": "comparative",
+            },
+        )(),
+    )
+    monkeypatch.setattr(prepare_cli, "prepare_dataset", fake_prepare_dataset)
+    monkeypatch.setattr(prepare_cli, "print_dataset_summary", lambda prepared: None)
+
+    prepare_cli.main()
+
+    assert observed == {
+        "raw_data_path": Path("data/all_feature_data_subset_for_comparative_model.csv"),
+        "experiment_mode": "comparative",
+        "force": True,
+    }
 
 
 def test_run_experiment_supports_hybrid_batches(
@@ -624,6 +666,219 @@ def test_train_fold_stops_after_20_non_improving_epochs(monkeypatch) -> None:
 
     assert result.best_epoch == 1
     assert result.epochs == 21
+
+
+def test_train_fold_checkpoint_selection_prefers_primary_metric_over_rmse(monkeypatch) -> None:
+    prepared = build_prepared_dataset_from_frame(
+        make_auc_ready_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            max_sequence_length=6,
+        ),
+    )
+    fold = build_cv_folds(prepared)[0]
+
+    monkeypatch.setattr(training_harness_module, "_train_epoch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        training_harness_module,
+        "predict_regression",
+        lambda *args, **kwargs: np.full(len(prepared.target[fold.val_indices]), 0.5, dtype=np.float32),
+    )
+
+    metric_sequence = iter(
+        [
+            RegressionMetrics(
+                rmse=0.20,
+                mae=0.2,
+                r2=0.0,
+                squared_error_sum=1.0,
+                auc=0.50,
+                pearson_r=0.0,
+                spearman_r=0.0,
+            ),
+            RegressionMetrics(
+                rmse=0.25,
+                mae=0.2,
+                r2=0.0,
+                squared_error_sum=1.0,
+                auc=0.70,
+                pearson_r=0.0,
+                spearman_r=0.0,
+            ),
+            RegressionMetrics(
+                rmse=0.25,
+                mae=0.2,
+                r2=0.0,
+                squared_error_sum=1.0,
+                auc=0.70,
+                pearson_r=0.0,
+                spearman_r=0.0,
+            ),
+        ]
+    )
+    monkeypatch.setattr(training_harness_module, "evaluate_predictions", lambda *args, **kwargs: next(metric_sequence))
+
+    def build_model(context: ArchitectureContext) -> nn.Module:
+        return nn.Linear(context.input_dim, context.output_dim)
+
+    result = train_fold(
+        prepared,
+        fold,
+        ArchitectureSpec(
+            family="mlp",
+            hidden_dims=(8,),
+            activation="relu",
+            dropout=0.0,
+            normalization="none",
+            use_bias=True,
+        ),
+        build_model,
+        training_config=TrainingConfig(
+            total_time_budget_seconds=1000.0,
+            cv_budget_ratio=1.0,
+            evaluate_test_split=False,
+            batch_size=2,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            grad_clip_norm=None,
+            min_fold_budget_seconds=0.0,
+            min_final_fit_budget_seconds=0.0,
+            early_stopping_patience=1,
+            device="cpu",
+        ),
+        seed=7,
+        budget_seconds=1000.0,
+    )
+
+    assert result.best_epoch == 2
+    assert result.metrics.auc == 0.70
+
+
+def test_comparative_fold_checkpoint_selection_prefers_primary_metric_over_rmse(monkeypatch) -> None:
+    prepared = build_comparative_prepared_dataset_from_frame(
+        make_auc_ready_dataset(),
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            explicit_test_genes=("GENE3",),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            experiment_mode="comparative",
+        ),
+        split_config=SplitConfig(random_seed=7),
+    )
+    fold = build_cv_folds(prepared)[0]
+
+    from autoresirch.prepare.comparative import training as comparative_training_module
+
+    monkeypatch.setattr(comparative_training_module, "_train_epoch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        comparative_training_module,
+        "predict_regression",
+        lambda *args, **kwargs: np.full(len(prepared.target[fold.val_indices]), 0.0, dtype=np.float32),
+    )
+
+    metric_sequence = iter(
+        [
+            RegressionMetrics(
+                rmse=0.20,
+                mae=0.2,
+                r2=0.0,
+                squared_error_sum=1.0,
+                auc=None,
+                pearson_r=0.0,
+                spearman_r=0.0,
+                overall_auc=0.50,
+                auc_class_neg1=0.50,
+                auc_class_0=0.50,
+                auc_class_pos1=0.50,
+                auc_pos_vs_neg=0.50,
+            ),
+            RegressionMetrics(
+                rmse=0.25,
+                mae=0.2,
+                r2=0.0,
+                squared_error_sum=1.0,
+                auc=None,
+                pearson_r=0.0,
+                spearman_r=0.0,
+                overall_auc=0.70,
+                auc_class_neg1=0.70,
+                auc_class_0=0.70,
+                auc_class_pos1=0.70,
+                auc_pos_vs_neg=0.70,
+            ),
+            RegressionMetrics(
+                rmse=0.25,
+                mae=0.2,
+                r2=0.0,
+                squared_error_sum=1.0,
+                auc=None,
+                pearson_r=0.0,
+                spearman_r=0.0,
+                overall_auc=0.70,
+                auc_class_neg1=0.70,
+                auc_class_0=0.70,
+                auc_class_pos1=0.70,
+                auc_pos_vs_neg=0.70,
+            ),
+        ]
+    )
+    diagnostics = FoldDiagnostics(class_count_neg1=1, class_count_0=1, class_count_pos1=1)
+    monkeypatch.setattr(
+        comparative_training_module,
+        "evaluate_comparative_predictions",
+        lambda *args, **kwargs: next(metric_sequence),
+    )
+    monkeypatch.setattr(
+        comparative_training_module,
+        "build_comparative_fold_diagnostics",
+        lambda *args, **kwargs: diagnostics,
+    )
+
+    def build_model(context: ArchitectureContext) -> nn.Module:
+        return nn.Linear(context.input_dim, context.output_dim)
+
+    result = train_comparative_fold(
+        prepared,
+        fold,
+        ArchitectureSpec(
+            family="mlp",
+            hidden_dims=(8,),
+            activation="relu",
+            dropout=0.0,
+            normalization="none",
+            use_bias=True,
+        ),
+        build_model,
+        training_config=TrainingConfig(
+            total_time_budget_seconds=1000.0,
+            cv_budget_ratio=1.0,
+            evaluate_test_split=False,
+            batch_size=2,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            grad_clip_norm=None,
+            min_fold_budget_seconds=0.0,
+            min_final_fit_budget_seconds=0.0,
+            early_stopping_patience=1,
+            device="cpu",
+        ),
+        metric_config=MetricConfig(primary_metric_name="weighted_cv_overall_auc"),
+        seed=7,
+        budget_seconds=1000.0,
+    )
+
+    assert result.best_epoch == 2
+    assert result.metrics.overall_auc == 0.70
 
 
 def test_comparative_prepared_dataset_builds_unique_within_gene_pairs() -> None:

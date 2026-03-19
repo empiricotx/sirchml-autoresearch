@@ -3,11 +3,10 @@ from __future__ import annotations
 import importlib
 import json
 import traceback
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from autoresirch.prepare import DATASET_CONFIG, METRIC_CONFIG
+from autoresirch.prepare import METRIC_CONFIG
 from autoresirch.prepare.shared.utils import resolve_primary_metric_name
 from autoresirch.session_manager.shared.analysis import (
     _build_analysis_input_record,
@@ -40,6 +39,7 @@ from autoresirch.session_manager.shared.storage import (
     allocate_run_dir,
     append_session_results_row,
     create_session,
+    dataset_config_from_session_context,
     load_session_context,
     load_session_state,
     save_session_state,
@@ -145,6 +145,12 @@ def _success_decision_record(
         if baseline_value is None:
             raise RuntimeError("Incumbent metric is undefined for a non-base run.")
         decision_delta = summary.primary_metric_value - baseline_value
+        incumbent_summary = None
+        incumbent_run_dir_value = state.run_dirs.get(incumbent_before_run_id)
+        if incumbent_run_dir_value is not None:
+            incumbent_summary = _summary_from_payload(
+                _load_run_summary(Path(incumbent_run_dir_value))
+            )
         if decision_delta > summary.improvement_epsilon:
             status = "keep"
             decision_reason = (
@@ -153,6 +159,47 @@ def _success_decision_record(
             )
             incumbent_after_run_id = run_context.run_id
             hypothesis_result = "supported"
+        elif abs(decision_delta) <= summary.improvement_epsilon and incumbent_summary is not None:
+            current_pearson = summary.weighted_cv_pearson_r_mean
+            incumbent_pearson = incumbent_summary.weighted_cv_pearson_r_mean
+            pearson_improved = False
+            if current_pearson is not None:
+                if incumbent_pearson is None:
+                    pearson_improved = True
+                else:
+                    pearson_improved = current_pearson > incumbent_pearson
+            if pearson_improved:
+                incumbent_pearson_label = (
+                    "undefined"
+                    if incumbent_pearson is None
+                    else f"{incumbent_pearson:.6f}"
+                )
+                status = "keep"
+                decision_reason = (
+                    f"Primary metric delta {decision_delta:.6f} stayed within epsilon "
+                    f"{summary.improvement_epsilon:.6f}, so weighted_cv_pearson_r_mean "
+                    f"broke the tie by improving from {incumbent_pearson_label} "
+                    f"to {current_pearson:.6f}."
+                )
+                incumbent_after_run_id = run_context.run_id
+                hypothesis_result = "supported"
+            else:
+                status = "discard"
+                if current_pearson is None or incumbent_pearson is None:
+                    decision_reason = (
+                        f"Primary metric delta {decision_delta:.6f} stayed within epsilon "
+                        f"{summary.improvement_epsilon:.6f}, and weighted_cv_pearson_r_mean "
+                        "could not break the tie."
+                    )
+                else:
+                    decision_reason = (
+                        f"Primary metric delta {decision_delta:.6f} stayed within epsilon "
+                        f"{summary.improvement_epsilon:.6f}, but weighted_cv_pearson_r_mean "
+                        f"did not improve over the incumbent ({current_pearson:.6f} vs "
+                        f"{incumbent_pearson:.6f})."
+                    )
+                incumbent_after_run_id = incumbent_before_run_id
+                hypothesis_result = "unsupported"
         else:
             status = "discard"
             decision_reason = (
@@ -342,8 +389,10 @@ def run_session_experiment(intent: RunIntent) -> DecisionRecord:
 
     started_at = datetime.fromisoformat(run_context.started_at)
     try:
+        session_dataset_config = dataset_config_from_session_context(context)
         summary = _session_manager_package().run_experiment(
-            dataset_config=replace(DATASET_CONFIG, experiment_mode=context.experiment_mode),
+            dataset_config=session_dataset_config,
+            prepared_dataset_cache_dir=context.prepared_dataset_cache_dir,
             run_dir=run_dir,
         )
     except Exception as exc:

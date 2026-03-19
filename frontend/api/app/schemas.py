@@ -14,6 +14,8 @@ class SessionListItem(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     session_id: str
+    experiment_mode: str | None = None
+    primary_metric_name: str | None = None
     status: str | None = None
     objective: str | None = None
     started_at: str | None = None
@@ -49,6 +51,8 @@ class RunDetailResponse(BaseModel):
     run_context: dict[str, Any] | None = None
     decision: dict[str, Any] | None = None
     summary: dict[str, Any] | None = None
+    primary_metric_name: str | None = None
+    primary_metric_value: float | None = None
     analysis_input: dict[str, Any] | None = None
     agent_analysis: dict[str, Any] | None = None
     synopsis_markdown: str | None = None

@@ -1,6 +1,6 @@
 {
-  "error_message": "Comparative mode requires at least two sequences for gene 'CD68'; found 1.",
-  "error_type": "ValueError",
-  "timestamp": "2026-03-19T17:57:23.401055+00:00",
-  "traceback": "Traceback (most recent call last):\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/session_manager/shared/orchestration.py\", line 345, in run_session_experiment\n    summary = _session_manager_package().run_experiment(\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/shared/orchestration.py\", line 216, in run_experiment\n    prepared = prepare_dataset(\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/standard/dataset.py\", line 374, in prepare_dataset\n    prepared = build_prepared_dataset_from_frame(\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/standard/dataset.py\", line 219, in build_prepared_dataset_from_frame\n    return build_comparative_prepared_dataset_from_frame(\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/comparative/dataset.py\", line 138, in build_comparative_prepared_dataset_from_frame\n    return build_comparative_prepared_dataset(sequence_prepared, metric_config=metric_config)\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/comparative/dataset.py\", line 39, in build_comparative_prepared_dataset\n    _validate_gene_pair_support(sequence_prepared)\n  File \"/Users/lucasplatter/sirchml-autoresearch/autoresirch/prepare/comparative/dataset.py\", line 25, in _validate_gene_pair_support\n    raise ValueError(\nValueError: Comparative mode requires at least two sequences for gene 'CD68'; found 1.\n"
+  "decision_status": "keep",
+  "primary_metric_value": 0.7387323193251953,
+  "run_id": "20260319-191327-r030",
+  "session_id": "20260319-191327"
 }

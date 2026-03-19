@@ -5,13 +5,33 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import pytest
 
 import session_manager
 from autoresirch.session_manager.shared import orchestration as session_orchestration_module
 from autoresirch.session_manager.shared import storage as session_storage_module
-from autoresirch.prepare import DatasetConfig
+from autoresirch.prepare import DatasetConfig, PreparedDataset
 from prepare import ExperimentSummary
+
+
+def _session_prepared_dataset(*, raw_data_path: Path, experiment_mode: str) -> PreparedDataset:
+    feature_name = "delta::feature_score" if experiment_mode == "comparative" else "feature_score"
+    return PreparedDataset(
+        flat_features=pd.DataFrame({feature_name: [1.0, 2.0]}),
+        sequence_features=None,
+        target=np.array([0.1, 0.2], dtype=np.float32),
+        genes=np.array(["GENE1", "GENE2"], dtype=object),
+        row_ids=np.array([0, 1], dtype=np.int64),
+        numeric_feature_columns=(feature_name,),
+        categorical_feature_columns=(),
+        train_genes=("GENE1", "GENE2"),
+        test_genes=(),
+        cv_genes=("GENE1", "GENE2"),
+        source_path=str(raw_data_path),
+        experiment_mode=experiment_mode,
+    )
 
 
 @pytest.fixture()
@@ -33,6 +53,14 @@ def session_env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(session_manager, "RUN_LOG", run_log_path)
     monkeypatch.setattr(session_orchestration_module, "RUN_LOG", run_log_path)
     monkeypatch.setattr(session_storage_module, "_collect_git_metadata", lambda: ("abc123", "main", False))
+    monkeypatch.setattr(
+        session_storage_module,
+        "prepare_dataset",
+        lambda *, dataset_config, artifact_root=None, **_kwargs: _session_prepared_dataset(
+            raw_data_path=Path(dataset_config.raw_data_path),
+            experiment_mode=dataset_config.experiment_mode,
+        ),
+    )
     monkeypatch.setattr(
         session_storage_module,
         "_load_architecture_metadata",
@@ -181,6 +209,7 @@ def _start_session(
     *,
     experiment_mode: str = "standard",
     objective: str | None = None,
+    raw_data_path: Path | None = None,
 ) -> None:
     argv = [
         "start",
@@ -191,6 +220,8 @@ def _start_session(
         "--experiment-mode",
         experiment_mode,
     ]
+    if raw_data_path is not None:
+        argv.extend(["--raw-data-path", str(raw_data_path)])
     if objective is not None:
         argv.extend(["--objective", objective])
     assert session_manager.main(argv) == 0
@@ -257,6 +288,45 @@ def test_start_persists_comparative_experiment_mode(session_env) -> None:
 
     assert context.experiment_mode == "comparative"
     assert context.objective == "Maximize weighted_cv_overall_auc"
+    assert context.feature_names == ("delta::feature_score",)
+
+
+def test_start_persists_raw_data_path_and_session_prepared_cache(session_env, monkeypatch) -> None:
+    session_id = "session-raw-data-001"
+    raw_data_path = session_env["tmp_path"] / "comparative.csv"
+    prepared_cache_roots: list[Path | None] = []
+
+    def fake_prepare_dataset(*, dataset_config, artifact_root=None, **_kwargs):
+        prepared_cache_roots.append(artifact_root)
+        if artifact_root is not None:
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            artifact_root.joinpath("prepared_dataset_comparative.pkl").write_bytes(b"prepared")
+            artifact_root.joinpath("prepared_dataset_metadata_comparative.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+        return _session_prepared_dataset(
+            raw_data_path=Path(dataset_config.raw_data_path),
+            experiment_mode=dataset_config.experiment_mode,
+        )
+
+    monkeypatch.setattr(session_storage_module, "prepare_dataset", fake_prepare_dataset)
+
+    _start_session(
+        session_id,
+        experiment_mode="comparative",
+        raw_data_path=raw_data_path,
+    )
+
+    context = session_manager.load_session_context(session_id)
+
+    assert context.raw_data_path == raw_data_path
+    assert context.feature_names == ("delta::feature_score",)
+    assert Path(context.dataset_config_payload["raw_data_path"]) == raw_data_path
+    assert context.dataset_config_payload["experiment_mode"] == "comparative"
+    assert context.prepared_dataset_cache_dir == session_manager.SESSIONS_DIR / session_id / "prepared_data"
+    assert prepared_cache_roots == [context.prepared_dataset_cache_dir]
+    assert context.prepared_dataset_cache_dir.joinpath("prepared_dataset_comparative.pkl").exists()
 
 
 def test_base_run_creates_expected_artifacts(session_env, monkeypatch) -> None:
@@ -580,6 +650,76 @@ def test_discarded_run_does_not_advance_incumbent_and_sync_restores_train(
     assert session_env["train_path"].read_text(encoding="utf-8") == baseline_source
 
 
+def test_within_epsilon_primary_delta_uses_pearson_tiebreak_to_keep(
+    session_env,
+    monkeypatch,
+) -> None:
+    session_id = "session-pearson-keep"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {"metric_value": 0.65, "weighted_cv_pearson_r_mean": 0.20},
+                {"metric_value": 0.64995, "weighted_cv_pearson_r_mean": 0.25},
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Try a near-tied candidate with stronger correlation.",
+        mutation_summary="Near-epsilon Pearson gain.",
+        description="Pearson tiebreak keep",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    kept_run_id = state.ordered_run_ids[-1]
+    kept_run_dir = Path(state.run_dirs[kept_run_id])
+    decision_payload = json.loads(kept_run_dir.joinpath("decision.json").read_text(encoding="utf-8"))
+
+    assert state.incumbent_run_id == kept_run_id
+    assert decision_payload["decision_status"] == "keep"
+    assert "broke the tie" in decision_payload["decision_reason"]
+
+
+def test_within_epsilon_primary_delta_without_pearson_gain_discards(
+    session_env,
+    monkeypatch,
+) -> None:
+    session_id = "session-pearson-discard"
+    _start_session(session_id)
+    monkeypatch.setattr(
+        session_manager,
+        "run_experiment",
+        _fake_run_experiment_factory(
+            [
+                {"metric_value": 0.65, "weighted_cv_pearson_r_mean": 0.20},
+                {"metric_value": 0.65005, "weighted_cv_pearson_r_mean": 0.19},
+            ]
+        ),
+    )
+
+    assert _run_base(session_id) == 0
+    assert _run_candidate(
+        session_id,
+        hypothesis="Try a near-tied candidate with weaker correlation.",
+        mutation_summary="Near-epsilon Pearson loss.",
+        description="Pearson tiebreak discard",
+    ) == 0
+
+    state = session_manager.load_session_state(session_id)
+    discarded_run_id = state.ordered_run_ids[-1]
+    discarded_run_dir = Path(state.run_dirs[discarded_run_id])
+    decision_payload = json.loads(discarded_run_dir.joinpath("decision.json").read_text(encoding="utf-8"))
+
+    assert state.incumbent_run_id == state.ordered_run_ids[0]
+    assert decision_payload["decision_status"] == "discard"
+    assert "did not improve over the incumbent" in decision_payload["decision_reason"]
+
+
 def test_crashed_run_records_failure(session_env, monkeypatch) -> None:
     session_id = "session-005"
     _start_session(session_id)
@@ -778,12 +918,23 @@ def test_candidate_run_comparative_analysis_includes_class_support(session_env, 
 
 def test_comparative_session_passes_mode_specific_dataset_config(session_env, monkeypatch) -> None:
     session_id = "session-comparative-002"
-    _start_session(session_id, experiment_mode="comparative")
+    raw_data_path = session_env["tmp_path"] / "comparative.csv"
+    _start_session(session_id, experiment_mode="comparative", raw_data_path=raw_data_path)
     captured_dataset_configs: list[DatasetConfig] = []
+    captured_cache_dirs: list[Path] = []
 
-    def fake_run_experiment(*, dataset_config=None, run_dir=None, latest_summary_path=None, **kwargs):
+    def fake_run_experiment(
+        *,
+        dataset_config=None,
+        prepared_dataset_cache_dir=None,
+        run_dir=None,
+        latest_summary_path=None,
+        **kwargs,
+    ):
         assert dataset_config is not None
         captured_dataset_configs.append(dataset_config)
+        assert prepared_dataset_cache_dir is not None
+        captured_cache_dirs.append(prepared_dataset_cache_dir)
         return _fake_run_experiment_factory(
             [
                 {
@@ -800,3 +951,5 @@ def test_comparative_session_passes_mode_specific_dataset_config(session_env, mo
 
     assert captured_dataset_configs
     assert captured_dataset_configs[0].experiment_mode == "comparative"
+    assert captured_dataset_configs[0].raw_data_path == raw_data_path
+    assert captured_cache_dirs == [session_manager.SESSIONS_DIR / session_id / "prepared_data"]
