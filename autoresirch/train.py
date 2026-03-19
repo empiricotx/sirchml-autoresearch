@@ -8,8 +8,8 @@ from autoresirch.prepare import ArchitectureContext, ArchitectureSpec, run_exper
 
 ARCHITECTURE = ArchitectureSpec(
     family="mlp",
-    hidden_dims=(32,),
-    activation="silu",
+    hidden_dims=(48,),
+    activation="relu",
     dropout=0.0,
     normalization="none",
     use_bias=True,
@@ -17,7 +17,7 @@ ARCHITECTURE = ArchitectureSpec(
 )
 
 
-def make_activation(name: str) -> nn.Module:
+def _activation(name: str) -> nn.Module:
     if name == "relu":
         return nn.ReLU()
     if name == "gelu":
@@ -27,7 +27,7 @@ def make_activation(name: str) -> nn.Module:
     raise ValueError(f"Unsupported activation: {name}")
 
 
-def make_normalization(name: str, width: int) -> nn.Module:
+def _normalization(name: str, width: int) -> nn.Module:
     if name == "none":
         return nn.Identity()
     if name == "layernorm":
@@ -37,71 +37,29 @@ def make_normalization(name: str, width: int) -> nn.Module:
     raise ValueError(f"Unsupported normalization: {name}")
 
 
-class FeedForwardBlock(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        output_dim: int,
-        *,
-        activation: str,
-        normalization: str,
-        dropout: float,
-        use_bias: bool,
-        residual: bool,
-    ) -> None:
+class SimpleMLP(nn.Module):
+    def __init__(self, context: ArchitectureContext, architecture: ArchitectureSpec) -> None:
         super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim, bias=use_bias)
-        self.normalization = make_normalization(normalization, output_dim)
-        self.activation = make_activation(activation)
-        self.dropout = nn.Dropout(dropout)
-        self.use_residual = residual
-        if residual and input_dim != output_dim:
-            self.skip = nn.Linear(input_dim, output_dim, bias=False)
-        else:
-            self.skip = nn.Identity()
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        outputs = self.linear(inputs)
-        outputs = self.normalization(outputs)
-        outputs = self.activation(outputs)
-        outputs = self.dropout(outputs)
-        if self.use_residual:
-            outputs = outputs + self.skip(inputs)
-        return outputs
-
-
-class RegressionMLP(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, architecture: ArchitectureSpec) -> None:
-        super().__init__()
-        residual = architecture.family == "residual_mlp"
         layers: list[nn.Module] = []
-        previous_width = input_dim
-        for width in architecture.hidden_dims:
-            layers.append(
-                FeedForwardBlock(
-                    previous_width,
-                    width,
-                    activation=architecture.activation,
-                    normalization=architecture.normalization,
-                    dropout=architecture.dropout,
-                    use_bias=architecture.use_bias,
-                    residual=residual,
-                )
-            )
-            previous_width = width
+        input_dim = context.input_dim
+
+        for hidden_dim in architecture.hidden_dims:
+            layers.append(nn.Linear(input_dim, hidden_dim, bias=architecture.use_bias))
+            layers.append(_normalization(architecture.normalization, hidden_dim))
+            layers.append(_activation(architecture.activation))
+            if architecture.dropout > 0:
+                layers.append(nn.Dropout(architecture.dropout))
+            input_dim = hidden_dim
+
         self.backbone = nn.Sequential(*layers) if layers else nn.Identity()
-        self.head = nn.Linear(previous_width, output_dim, bias=architecture.use_bias)
+        self.head = nn.Linear(input_dim, context.output_dim, bias=architecture.use_bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.head(self.backbone(inputs))
 
 
 def build_model(context: ArchitectureContext) -> nn.Module:
-    return RegressionMLP(
-        input_dim=context.input_dim,
-        output_dim=context.output_dim,
-        architecture=ARCHITECTURE,
-    )
+    return SimpleMLP(context, ARCHITECTURE)
 
 
 def main() -> None:

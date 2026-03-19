@@ -17,15 +17,53 @@ from autoresirch.prepare.shared.schemas import (
 )
 
 
-def _validate_gene_pair_support(prepared: PreparedDataset) -> None:
-    genes_to_validate = (*prepared.train_genes, *prepared.test_genes)
-    for gene in genes_to_validate:
-        gene_count = int(np.sum(prepared.genes == gene))
-        if gene_count < 2:
-            raise ValueError(
-                f"Comparative mode requires at least two sequences for gene {gene!r}; "
-                f"found {gene_count}."
-            )
+def _filter_genes_with_pair_support(prepared: PreparedDataset) -> PreparedDataset:
+    genes_to_consider = (*prepared.train_genes, *prepared.test_genes)
+    eligible_genes = tuple(
+        gene
+        for gene in genes_to_consider
+        if int(np.sum(prepared.genes == gene)) >= 2
+    )
+    eligible_gene_set = set(eligible_genes)
+    keep_mask = np.array([gene in eligible_gene_set for gene in prepared.genes], dtype=bool)
+
+    if np.all(keep_mask):
+        return prepared
+
+    filtered_features = None
+    if prepared.flat_features is not None:
+        filtered_features = prepared.flat_features.iloc[keep_mask].reset_index(drop=True)
+
+    filtered_sequence_features = None
+    if prepared.sequence_features is not None:
+        filtered_sequence_features = prepared.sequence_features[keep_mask]
+
+    filtered_train_genes = tuple(gene for gene in prepared.train_genes if gene in eligible_gene_set)
+    filtered_test_genes = tuple(gene for gene in prepared.test_genes if gene in eligible_gene_set)
+    filtered_cv_genes = tuple(gene for gene in prepared.cv_genes if gene in eligible_gene_set)
+    filtered_row_ids = np.arange(int(np.sum(keep_mask)), dtype=np.int64)
+
+    return PreparedDataset(
+        flat_features=filtered_features,
+        sequence_features=filtered_sequence_features,
+        target=prepared.target[keep_mask],
+        genes=prepared.genes[keep_mask],
+        row_ids=filtered_row_ids,
+        numeric_feature_columns=prepared.numeric_feature_columns,
+        categorical_feature_columns=prepared.categorical_feature_columns,
+        train_genes=filtered_train_genes,
+        test_genes=filtered_test_genes,
+        cv_genes=filtered_cv_genes,
+        source_path=prepared.source_path,
+        sequence_feature_name=prepared.sequence_feature_name,
+        sequence_feature_shape=prepared.sequence_feature_shape,
+        experiment_mode=prepared.experiment_mode,
+        target_class=(
+            None if prepared.target_class is None else prepared.target_class[keep_mask]
+        ),
+        left_row_ids=prepared.left_row_ids,
+        right_row_ids=prepared.right_row_ids,
+    )
 
 
 def build_comparative_prepared_dataset(
@@ -36,7 +74,7 @@ def build_comparative_prepared_dataset(
     if sequence_prepared.experiment_mode != "standard":
         raise ValueError("Comparative dataset construction expects standard sequence-level input.")
 
-    _validate_gene_pair_support(sequence_prepared)
+    sequence_prepared = _filter_genes_with_pair_support(sequence_prepared)
     if not sequence_prepared.has_flat_features:
         raise ValueError("Comparative mode currently requires flat numeric features.")
 

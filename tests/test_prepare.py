@@ -668,6 +668,45 @@ def test_comparative_prepared_dataset_builds_unique_within_gene_pairs() -> None:
     assert int(prepared.target_class[0]) == -1
 
 
+def test_comparative_prepared_dataset_drops_singleton_genes() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "gene": ["GENE1", "GENE1", "GENE2", "GENE3", "GENE3", "GENE4"],
+            "target": [0.2, 0.5, 0.3, 0.1, 0.6, 0.4],
+            "antisense_strand_seq": ["AAAA", "AAAC", "CCCC", "GGGG", "GGGA", "UUUU"],
+            "sirna_sequence": ["AAAA", "AAAC", "CCCC", "GGGG", "GGGA", "UUUU"],
+            "feature_score": [1.0, 1.4, 2.0, 0.5, 0.9, 1.2],
+        }
+    )
+
+    prepared = build_comparative_prepared_dataset_from_frame(
+        dataframe,
+        dataset_config=DatasetConfig(
+            raw_data_path=Path("data/mock.csv"),
+            target_column="target",
+            gene_column="gene",
+            sequence_columns=(),
+            drop_columns=("sirna_sequence", "antisense_strand_seq"),
+            explicit_test_genes=("GENE3", "GENE4"),
+            explicit_cv_genes=("GENE1", "GENE2"),
+            experiment_mode="comparative",
+        ),
+        split_config=SplitConfig(random_seed=7),
+    )
+
+    assert prepared.train_genes == ("GENE1",)
+    assert prepared.test_genes == ("GENE3",)
+    assert prepared.cv_genes == ("GENE1",)
+    assert set(prepared.genes.tolist()) == {"GENE1", "GENE3"}
+    assert len(prepared.target) == 2
+    assert prepared.left_row_ids is not None
+    assert prepared.right_row_ids is not None
+    assert all(
+        gene not in {"GENE2", "GENE4"}
+        for gene in prepared.genes.tolist()
+    )
+
+
 def test_comparative_aggregate_reports_multiclass_auc_fields() -> None:
     fold_results = [
         FoldResult(
